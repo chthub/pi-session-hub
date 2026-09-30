@@ -37,18 +37,21 @@
 | Surface kind | Count |
 | --- | --- |
 | command | 6 |
-| tool | 2 |
+| tool | 3 |
 | shortcut | 1 |
 | skill | 1 |
 | renderer | 1 |
 
 **Commands**: `/session-hub`, `/hub`, `/session-search`, `/session-open`, `/session-handoff`, `/session-native`.
 
-**Tools**: `session_hub_search`, `session_hub_context`.
+**Tools**: `session_hub_enable`, `session_hub_search`, `session_hub_context`.
+
+Only `session_hub_enable` is exposed at startup. Call it to enable search and context
+loading for the next model request; no `tool_search` configuration is required.
 
 **Shortcut**: `alt+r`.
 
-**Skill**: `session-hub`, which tells the agent when to reach for `session_hub_search` on its own.
+**Skill**: `session-hub`, which tells the agent when to enable the hub and search past sessions.
 
 ## Why use it?
 

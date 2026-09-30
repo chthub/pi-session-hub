@@ -24,7 +24,9 @@ code.
 
 | Surface | Use |
 |---|---|
-| `session_hub_search` tool | Search the local index. Preferred: you can call it directly. |
+| `session_hub_enable` tool | Enable search and context loading when they are not already available. Does not read transcripts. |
+| `session_hub_search` tool | Search the local index after enabling the hub. |
+| `session_hub_context` tool | Load a session's context after enabling the hub. |
 | `/session-hub` | Open the interactive two-pane browser (also `/hub`, or `alt+r`). |
 | `/session-search <query>` | Same search, printed into the chat. Supports `--harness <id>` and `--limit <n>`. |
 | `/session-open <id>` | Read-only metadata + transcript preview. |

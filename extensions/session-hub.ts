@@ -811,8 +811,43 @@ export default function sessionHub(pi: ExtensionAPI) {
   // ------------------------------------------------------------------- tool
 
   pi.registerTool({
+    name: "session_hub_enable",
+    label: "Enable Session Hub",
+    description:
+      "Enable session history search and context-loading tools across coding harnesses. " +
+      "Does not search or load transcripts. Enabled tools are available on the next model request.",
+    promptSnippet:
+      "If session history tools are not already available, call session_hub_enable first " +
+      "when the user asks about previous work, prior sessions, or continuing an earlier conversation.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+    async execute() {
+      const names = ["session_hub_search", "session_hub_context"];
+      const registered = new Set(pi.getAllTools().map((tool) => tool.name));
+      const unavailable = names.filter((name) => !registered.has(name));
+      if (unavailable.length > 0) {
+        throw new Error(`Cannot enable unavailable tools: ${unavailable.join(", ")}.`);
+      }
+
+      pi.setActiveTools([...new Set([...pi.getActiveTools(), ...names])]);
+      const active = new Set(pi.getActiveTools());
+      const missing = names.filter((name) => !active.has(name));
+      if (missing.length > 0) {
+        throw new Error(`Tools still inactive after activation: ${missing.join(", ")}.`);
+      }
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Enabled: ${names.join(", ")}. Available on the next model request.`,
+        }],
+        details: { enabled: names },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "session_hub_search",
     label: "Session Hub Search",
+    exposure: "deferred",
     description:
       "Search the local index of coding-agent sessions across Pi, Claude Code, Codex, OpenCode, Crush and JCode. " +
       "Use this when the user asks which session they worked on something in, or wants to find prior context.",
@@ -919,6 +954,7 @@ export default function sessionHub(pi: ExtensionAPI) {
   pi.registerTool({
     name: "session_hub_context",
     label: "Session Hub Context",
+    exposure: "deferred",
     description:
       "Load the full imported-context document for one session from any harness, so you can continue " +
       "work that started elsewhere. Use after session_hub_search when the user asks to pick up a prior session.",
