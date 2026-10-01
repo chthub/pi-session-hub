@@ -814,11 +814,14 @@ export default function sessionHub(pi: ExtensionAPI) {
     name: "session_hub_enable",
     label: "Enable Session Hub",
     description:
-      "Enable session history search and context-loading tools across coding harnesses. " +
+      "Enable tools to search or read past conversations with coding agents, " +
+      "only when the user explicitly requests searching or reading those conversations. " +
+      "A request to continue a task alone is not sufficient. " +
       "Does not search or load transcripts. Enabled tools are available on the next model request.",
     promptSnippet:
-      "If session history tools are not already available, call session_hub_enable first " +
-      "when the user asks about previous work, prior sessions, or continuing an earlier conversation.",
+      "Call session_hub_enable only when session history tools are unavailable and the user " +
+      "explicitly requests searching or reading past conversations with coding agents. " +
+      "Do not enable it merely because the user says to continue a task or mentions previous work.",
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute() {
       const names = ["session_hub_search", "session_hub_context"];

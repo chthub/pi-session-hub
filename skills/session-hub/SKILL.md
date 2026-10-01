@@ -1,6 +1,6 @@
 ---
 name: session-hub
-description: Search and reuse past coding-agent sessions across harnesses (Pi, Claude Code, Codex, OpenCode, Crush, JCode). Use when the user asks which session they worked on something in, wants to find prior context, wants to continue work from another tool, or asks "where did I do X" / "in what chat did I fix Y".
+description: Search and read past conversations with coding agents across harnesses (Pi, Claude Code, Codex, OpenCode, Crush, JCode). Use only when the user explicitly requests searching or reading those conversations, e.g. "find the agent session where we discussed X" or "read my previous Codex conversation". Do not use merely because the user says "continue working on X", mentions previous work, or wants project context.
 ---
 
 # Session Hub
@@ -10,12 +10,18 @@ machine and exposes them through one list.
 
 ## When to use it
 
-Reach for the hub when the user:
+Use the hub **only when the user explicitly requests searching or reading past
+conversations with coding agents**, for example:
 
-- asks which session they worked on something in ("where did I implement the db layer?")
-- wants prior context before starting new work
-- wants to continue a conversation that started in another tool
-- asks what they were doing on a project recently
+- "Find the agent session where we discussed the db layer."
+- "In which chat with Codex did we fix this bug?"
+- "Read my previous Claude Code conversation about this project."
+- "Load that previous agent conversation so we can continue from it."
+
+Do **not** infer permission to access session history from "continue working on X",
+"what did we do on this project recently", a mention of previous work, or a request
+for project context alone. If a request is ambiguous, clarify whether the user
+wants past agent conversations searched or read before enabling or using the hub.
 
 Do **not** use it for reading project source files. It reads agent transcripts, not
 code.
@@ -24,7 +30,7 @@ code.
 
 | Surface | Use |
 |---|---|
-| `session_hub_enable` tool | Enable search and context loading when they are not already available. Does not read transcripts. |
+| `session_hub_enable` tool | Enable unavailable search and context-loading tools only for an explicit request to search or read past agent conversations. Does not read transcripts. |
 | `session_hub_search` tool | Search the local index after enabling the hub. |
 | `session_hub_context` tool | Load a session's context after enabling the hub. |
 | `/session-hub` | Open the interactive two-pane browser (also `/hub`, or `alt+r`). |
