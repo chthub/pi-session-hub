@@ -21,8 +21,8 @@ import type {
   ToolUseSummary,
 } from "../types.ts";
 import { emptyFidelity } from "../types.ts";
-import type { NativeResumeAction, SessionAdapter } from "./types.ts";
-import { clip, cleanText } from "../security.ts";
+import type { NativeResumeAction, SessionAdapter, SessionReadOptions } from "./types.ts";
+import { clip, cleanText, cleanTranscriptText } from "../security.ts";
 import { openReadOnly, type ReadOnlyDb } from "../sqlite.ts";
 import {
   addSearchText,
@@ -32,6 +32,8 @@ import {
   isoFromMs,
   probePath,
   pushCommand,
+  pushToolCall,
+  pushToolResult,
   safeStat,
   searchTextFrom,
   titleFromPreview,
@@ -118,7 +120,7 @@ export class OpenCodeAdapter implements SessionAdapter {
     }
   }
 
-  async getSession(nativeId: string): Promise<SessionDetail | null> {
+  async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     const db = await openReadOnly(this.dbPath);
     if (!db) return null;
     try {
@@ -164,6 +166,12 @@ export class OpenCodeAdapter implements SessionAdapter {
           const tool = typeof o.tool === "string" ? o.tool : "tool";
           toolNames.push(tool);
           pushCommand(commands, extractCommand(tool, o.state ?? o));
+          if (opts.includeToolActivity) {
+            const state = o.state && typeof o.state === "object" ? o.state as Record<string, unknown> : o;
+            pushToolCall(messages, tool, "input" in state ? state.input : o.input, o.callID ?? o.call_id ?? o.id);
+            if ("output" in state) pushToolResult(messages, state.output, tool, o.callID ?? o.call_id ?? o.id);
+            else if ("error" in state) pushToolResult(messages, `错误：${String(state.error)}`, tool, o.callID ?? o.call_id ?? o.id);
+          }
           continue;
         }
         if (type !== "text" || typeof o.text !== "string") continue;
@@ -177,14 +185,17 @@ export class OpenCodeAdapter implements SessionAdapter {
             /* keep default */
           }
         }
-        const t = cleanText(o.text);
+        const t = opts.preserveFormatting ? cleanTranscriptText(o.text) : cleanText(o.text);
         if (t) messages.push({ role, text: clip(t, 4000) });
       }
 
-      const base = this.toSession(db, row, messages.length);
+      const sourceCount = opts.includeToolActivity
+        ? db.get<{ n: number }>("select count(*) as n from message where session_id = ?", [nativeId])?.n ?? messages.length
+        : messages.length;
+      const base = this.toSession(db, row, sourceCount);
       return {
         ...base,
-        messageCount: messages.length || base.messageCount,
+        messageCount: opts.includeToolActivity ? sourceCount : messages.length || base.messageCount,
         toolCount: toolNames.length,
         messages,
         tools: summarize(toolNames),

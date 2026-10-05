@@ -17,8 +17,8 @@ import type {
   ToolUseSummary,
 } from "../types.ts";
 import { emptyFidelity } from "../types.ts";
-import type { NativeResumeAction, SessionAdapter } from "./types.ts";
-import { clip, cleanText } from "../security.ts";
+import type { NativeResumeAction, SessionAdapter, SessionReadOptions } from "./types.ts";
+import { clip, cleanText, cleanTranscriptText } from "../security.ts";
 import { openReadOnly } from "../sqlite.ts";
 import {
   addSearchText,
@@ -27,6 +27,7 @@ import {
   isoFromSec,
   probePath,
   pushCommand,
+  pushTranscriptBlocks,
   safeStat,
   searchTextFrom,
   titleFromPreview,
@@ -96,7 +97,7 @@ export class CrushAdapter implements SessionAdapter {
     }
   }
 
-  async getSession(nativeId: string): Promise<SessionDetail | null> {
+  async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     const db = await openReadOnly(this.dbPath);
     if (!db) return null;
     try {
@@ -130,15 +131,18 @@ export class CrushAdapter implements SessionAdapter {
         if (toolResult) hasToolResults = true;
         for (const t of tools) toolNames.push(t);
         pushCommand(commands, command);
-        const clean = cleanText(text);
-        if (clean) messages.push({ role: m.role, text: clip(clean, 4000) });
+        if (opts.includeToolActivity) pushTranscriptBlocks(messages, m.role, parts, opts);
+        else {
+          const clean = opts.preserveFormatting ? cleanTranscriptText(text) : cleanText(text);
+          if (clean) messages.push({ role: m.role, text: clip(clean, 4000) });
+        }
       }
 
       const stat = safeStat(this.dbPath);
       const base = this.toSession(db, row, stat);
       return {
         ...base,
-        messageCount: messages.length || base.messageCount,
+        messageCount: opts.includeToolActivity ? base.messageCount : messages.length || base.messageCount,
         toolCount: toolNames.length,
         messages,
         tools: summarize(toolNames),

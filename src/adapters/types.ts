@@ -10,6 +10,13 @@ export interface ListOptions {
   maxSessions?: number;
 }
 
+export interface SessionReadOptions {
+  preserveFormatting?: boolean;
+  /** Recover individual calls/results for the Web Viewer, without changing
+   * the existing TUI/context/handoff transcript by default. */
+  includeToolActivity?: boolean;
+}
+
 /**
  * Every harness gets one adapter. Adapters are strictly read-only: they open
  * files and SQLite databases for reading and never write outside the
@@ -25,8 +32,9 @@ export interface SessionAdapter {
   /** Metadata-only listing. Must not load full transcripts. */
   listSessions(opts?: ListOptions): Promise<ExternalSession[]>;
 
-  /** Full transcript for one session, used by preview and handoff. */
-  getSession(nativeId: string): Promise<SessionDetail | null>;
+  /** Recovered transcript. Opt into Markdown/TeX whitespace for the Web Viewer;
+   * default normalization stays compatible with TUI/context/handoff callers. */
+  getSession(nativeId: string, opts?: SessionReadOptions): Promise<SessionDetail | null>;
 
   /**
    * Native resume command for the original harness, or null when no safe,

@@ -35,15 +35,24 @@
     ],
     "image": "https://raw.githubusercontent.com/Gateton/pi-session-hub/main/assets/session-hub.png"
   },
+  "bin": {
+    "pi-session-hub-web": "./bin/web.mjs"
+  },
+  "dependencies": {
+    "jiti": "^2.6.1",
+    "katex": "^0.16.22",
+    "markdown-it": "^14.1.0"
+  },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
   "engines": {
     "node": ">=22.5.0"
   },
   "files": [
+    "bin",
     "extensions",
     "src",
     "skills",
@@ -54,6 +63,14 @@
   "scripts": {
     "test": "node test/acceptance.mjs",
     "test:smoke": "node test/smoke.mjs",
+    "test:web": "node test/web.mjs && node test/web-open.mjs",
+    "test:web:browser": "node test/web-browser.mjs",
+    "web": "node bin/web.mjs",
     "prepublishOnly": "node test/acceptance.mjs"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.8",
+    "@types/markdown-it": "^14.2.0",
+    "@types/node": "^22.20.5"
   }
 }

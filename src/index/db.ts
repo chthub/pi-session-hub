@@ -269,6 +269,7 @@ export interface QueryOptions {
   filePath?: string | null;
   changedOnly?: boolean;
   limit?: number;
+  offset?: number;
 }
 
 export function querySessions(
@@ -305,8 +306,8 @@ export function querySessions(
   const sql =
     `select s.* from sessions s` +
     (where.length ? ` where ${where.join(" and ")}` : "") +
-    ` order by coalesce(s.updated_at, s.created_at) desc limit ?`;
-  params.push(limit);
+    ` order by coalesce(s.updated_at, s.created_at) desc, s.uid limit ? offset ?`;
+  params.push(limit, opts.offset ?? 0);
 
   return handle.db.all<IndexedSessionRow>(sql, params);
 }
@@ -360,6 +361,7 @@ export function rowToSession(row: IndexedSessionRow): ExternalSession {
     messageCount: row.message_count,
     toolCount: row.tool_count,
     preview: row.preview,
+    searchText: null,
     fidelity,
     mtimeMs: row.mtime_ms,
     size: row.size,

@@ -3,7 +3,7 @@
 
 # pi-session-hub
 
-**One list for every coding-agent session on your machine. Browse, search and continue sessions from Claude Code, Codex, OpenCode, Crush and JCode without leaving Pi.**
+**One list for every coding-agent session on your machine. Browse, search and continue in Pi, or read conversations in a standalone local Web Viewer with Markdown, math and a persistent message outline.**
 
 [![npm](https://img.shields.io/npm/v/pi-session-hub?label=npm)](https://www.npmjs.com/package/pi-session-hub)
 [![Pi extension](https://img.shields.io/badge/Pi-extension-19c7d4)](https://github.com/earendil-works/pi-coding-agent)
@@ -12,23 +12,26 @@
 
 </div>
 
-`pi-session-hub` adds a cross-harness session browser to Pi:
+`pi-session-hub` provides a cross-harness terminal browser for Pi and an independent, read-only Web Viewer:
 
 - **See every agent in one list**: Pi, Claude Code, Codex, OpenCode, Crush and JCode sessions, each row labelled with its harness, project, model and recency.
 - **Continue work that started elsewhere**: press `Enter` and the selected session's conversation is loaded into the current chat as a tiered, budgeted context package, so the next thing you type already has it.
-- **Read without spending tokens**: `v` opens the full recovered transcript in a read-only viewer for free.
+- **Read without spending tokens**: `v` opens the full recovered transcript in a read-only terminal viewer for free. The standalone Web Viewer adds Markdown and `$...$` / `$$...$$` math rendering in your browser.
 - **Reopen the original tool when you want to**: `n` runs the session's own resume command, with the exact command and its verification basis shown before anything is launched.
-- **Stay local and read-only**: nothing outside `~/.pi/agent/pi-session-hub/` is ever written, no transcript leaves the machine, and no external session is ever disguised as a Pi session.
+- **Follow your questions**: the Web Viewer's always-visible user-message outline supports search, click-to-jump, previous/next navigation and scroll tracking.
+- **Inspect agent activity**: consecutive tool calls/results share one compact foldout with tool names, arguments, commands and source call IDs.
+- **Stay local and read-only**: source stores are never edited, only `~/.pi/agent/pi-session-hub/` is written by the hub, and transcripts are never uploaded to external services. Web access is authenticated loopback HTTP, optionally through a trusted local tunnel.
 
 ## Package facts
 
 | Fact | Value |
 | --- | --- |
 | Package | `pi-session-hub` |
-| Version | `0.1.0` |
+| Version | `0.2.0` |
 | Node engine | `>=22.5.0` |
-| Runtime dependencies | none (uses the built-in `node:sqlite` with FTS5) |
+| Runtime dependencies | `jiti`, `markdown-it`, `katex`; SQLite + FTS5 uses built-in `node:sqlite` |
 | Pi entrypoints | `./extensions/session-hub.ts` |
+| Standalone CLI | `pi-session-hub-web` (`npm run web` from a checkout) |
 | Supported harnesses | 6 |
 | Package image | [assets/session-hub.png](https://raw.githubusercontent.com/Gateton/pi-session-hub/main/assets/session-hub.png) |
 
@@ -42,7 +45,9 @@
 | skill | 1 |
 | renderer | 1 |
 
-**Commands**: `/session-hub`, `/hub`, `/session-search`, `/session-open`, `/session-handoff`, `/session-native`.
+**Pi commands**: `/session-hub`, `/hub`, `/session-search`, `/session-open`, `/session-handoff`, `/session-native`.
+
+**Standalone CLI**: `pi-session-hub-web [--port 43123] [--no-open]`.
 
 **Tools**: `session_hub_enable`, `session_hub_search`, `session_hub_context`.
 
@@ -64,6 +69,17 @@ loading for the next model request; no `tool_search` configuration is required.
 | Let the agent search your history itself | `session_hub_search` finds sessions; `session_hub_context` loads one session's context document so the agent can actually continue it. |
 | Hand a session to a fresh Pi thread for review | `h` puts an `Imported Session Handoff` draft in the editor so you can read and edit it before sending. |
 
+## Choose a viewer
+
+| Mode | Start | Best for |
+| --- | --- | --- |
+| Pi terminal | `alt+r` or `/session-hub` | Search and continue work inside Pi |
+| Standalone Web Viewer | `npm run web` from this checkout | Read Markdown/math, navigate questions and inspect tool calls without sending context to an LLM |
+
+The Web Viewer in this fork is available in this checkout. The npm/gallery links
+refer to the upstream package; do not assume an upstream npm release includes
+these additions until a corresponding release is published.
+
 ## Install
 
 ```bash
@@ -73,8 +89,8 @@ pi install npm:pi-session-hub
 # Project-local
 pi install npm:pi-session-hub -l
 
-# From git
-pi install git:github.com/Gateton/pi-session-hub
+# This fork from git
+pi install git:github.com/chthub/pi-session-hub
 
 # Local checkout, run from this package directory
 pi install .
@@ -86,7 +102,7 @@ Try it without installing:
 pi -e /path/to/pi-session-hub
 ```
 
-## Quick start
+## Quick start in Pi
 
 1. Install the package and start Pi in any project.
 
@@ -98,24 +114,113 @@ pi -e /path/to/pi-session-hub
 
    Or type `/session-hub`, or `/hub`. The hub replaces Pi's UI area rather than floating over the chat. For a true alternate-screen takeover, set Pi's own `tuiMode` to `"fullscreen"` in `~/.pi/agent/settings.json`.
 
-3. The first run indexes your harnesses. On a machine with 430 sessions this takes about two seconds; later runs are incremental and skip unchanged files.
+3. The first run indexes your harnesses. Scan time depends on store size and filesystem speed; later scans reuse unchanged index entries, but still read source metadata.
 
 4. Pick a session and press `Enter`. The conversation is loaded into the current chat:
 
    ```text
     imported transcript  ◆ JCode  102/804 messages  ·  ~8,172 tokens
-    source: ~/.jcode/sessions/session_sauropod_1789838887910_ee0399e551863ce9.json
-    - Original objective: okay ahora lo que tenemos que hacer para prepararnos...
+    source: ~/.jcode/sessions/session_example.json
+    - Original objective: implement the billing endpoint and its regression tests
     expand this message to read the imported transcript
    ```
 
-   Just type what you want to do next. The cost is reported every time, and the message is collapsed until you expand it.
+   The snippet above is an illustrative example, not a real transcript. Just type what you want to do next. The cost is reported every time, and the message is collapsed until you expand it.
 
 5. To ask the agent directly instead, just ask. It has the tools:
 
    ```text
    Where did I work on the language switcher?
    ```
+
+## Standalone Web Viewer
+
+The Web Viewer runs independently of Pi. From a checkout:
+
+```bash
+npm install --legacy-peer-deps
+npm run web
+# Choose another port, or use 0 for an available port:
+npm run web -- --port 43124
+```
+
+When an installed version includes this CLI, use `pi-session-hub-web [--port 43123] [--no-open]`.
+No Pi process is required. Startup scans the same six harnesses and prints a URL
+such as `http://127.0.0.1:43123/#token=...`. If `$BROWSER` is available (for example,
+in a VS Code/Cursor remote terminal), it asks that helper to open the full URL
+in your computer's external browser. Otherwise it prints manual instructions.
+Use `npm run web -- --no-open` to disable the opening request. A failed opening
+request does not stop the server.
+Open the **complete URL**, keep it private, and stop the server with `Ctrl+C`.
+The URL fragment is removed after the page stores the token for that browser tab.
+A server restart generates a new token; open its new link. Refreshing the browser
+loads UI changes; changes to the server or adapters require stopping with `Ctrl+C`
+and restarting `npm run web`.
+
+The viewer supports:
+
+- Session lists with pagination, FTS search and harness filtering.
+- Read-only recovered transcripts with Markdown, inline `$x^2$` and display
+  `$$...$$` math, including multiline display equations. Code blocks, inline code
+  and tool results stay literal. Escape ordinary dollar signs as `\$`.
+- A three-pane reading layout: sessions, conversation and an **always-visible
+  user-message outline**. Click any question to jump, filter the outline by its
+  full text, or move to the previous/next question. The current question follows
+  your scroll position, including while reading the assistant's reply.
+- On narrow screens, sessions move into a drawer and the user-message outline
+  stays visible below the reading pane, with its own scroll area.
+- Distinct user/assistant cards, compact session metadata, a sticky reading
+  toolbar and a light/dark theme switch. Connection status lives in a compact
+  top bar rather than a separate banner, leaving more height for the transcript.
+  Agent replies and tool activity are indented beneath full-width user messages;
+  tool-output collapse boxes are narrower and more compact. Consecutive tool
+  calls/results share one collapsed group; user or assistant prose ends the group.
+  Expand it to read each call's tool name, source arguments and command/argv
+  fields, followed by its output in recorded order. Call IDs are shown when the
+  source provides them. Missing arguments are labelled rather than inferred.
+  Parameters and commands are read-only text, never executable UI actions.
+- Raw text (without losing your reading position or closing expanded tool groups),
+  jump-to-start/end and an explicit index refresh.
+- Web-only reconstruction of tool activity across all six adapters; default
+  TUI/context/handoff reads stay unchanged. Recovered **record** counts include
+  individual calls/results and can exceed the source's message count.
+- Visible scan/read errors, recovery counts and source fidelity notes. It uses
+  the existing adapter limits, not an unlimited reader; search still covers
+  only the indexed excerpts. Chinese labels in formulas are supported, including
+  `\mathrm{计数}` and `\mathrm{训练集}`. Unsupported math shows a visible fallback.
+- Local scripts, KaTeX CSS and fonts: no CDN requests, even when viewing formulas.
+
+**Security:** the server binds only to `127.0.0.1`, with no public-bind option.
+API requests require a random token, and Host/Origin checks reject foreign browser
+origins and DNS rebinding. Transcript HTML is disabled, links are isolated,
+remote images are not fetched, and KaTeX runs with `trust: false`. Text and metadata
+pass through the existing best-effort secret redactor. This is not a sandbox
+against other processes running as your own account; do not share the token.
+No HTTP endpoint resumes sessions, executes tools or edits source transcripts.
+Only the hub's own local index is updated.
+
+### VS Code port forwarding and an external browser
+
+1. Start the viewer **in the remote VS Code terminal** with `npm run web`.
+   `$BROWSER` lets the client resolve the remote URL and request an external
+   browser; simply clicking a terminal link may open VS Code's internal browser.
+2. Keep the viewer's remote port forwarded in the **Ports** panel. The local port
+   may differ from the remote port; the server accepts literal loopback addresses
+   (`localhost`, `127.0.0.1`, `[::1]`) on any valid forwarded port.
+3. If opening manually, copy the **local address from the Ports panel**, not
+   necessarily the remote address printed by the server, and append the original
+   `/#token=...`. For example, if remote `43123` maps to local `53123`, use
+   `http://127.0.0.1:53123/#token=...`.
+
+The token is removed from an opened tab's address bar and stored only in that
+browser tab. Another browser does not inherit it: use the original startup token.
+A refused connection means the local forwarding/listener is unavailable; a `403`
+means Host/Origin was rejected; a `401` means the API token is missing or stale.
+
+`localhost` on the remote machine is not `localhost` on your computer. Standard
+trusted SSH forwarding also works with different local/remote ports. Do not expose
+the viewer through a public proxy. When a compute allocation ends, its viewer
+process ends too.
 
 ## Keyboard reference
 
@@ -231,8 +336,8 @@ Both are covered by regression tests.
 
 - The index is local: `~/.pi/agent/pi-session-hub/index.sqlite`.
 - Credential stores are never read. `auth.json`, `.credentials.json`, `.env`, `request_dump_*` and similar are denied by name before any open is attempted.
-- Transcript text passes through a redactor (Bearer tokens, `sk-` keys, JWTs, `api_key=` and `password=` patterns) before being stored or written into a handoff.
-- No network access, ever, for indexing or searching.
+- Transcript text passes through a best-effort redactor (Bearer tokens, `sk-` keys, JWTs, assignments and quoted JSON credential fields) before indexing, handoff or Web display. This does not guarantee detection of every possible secret.
+- Indexing and searching never contact external services. The optional Web Viewer serves records over authenticated loopback HTTP only.
 
 ## Architecture
 
@@ -245,6 +350,8 @@ src/handoff.ts              deterministic handoff document
 src/native.ts               native resume resolve and launch
 src/security.ts             path guards and secret redaction
 src/tui/                    full-screen hub and transcript viewer
+src/web/                    loopback server, safe Markdown/math and browser UI
+bin/web.mjs                 independent Web Viewer CLI
 skills/session-hub/         agent-facing skill
 ```
 
@@ -263,7 +370,20 @@ Verified against the running binary rather than assumed:
 ```bash
 node test/smoke.mjs        # exercise every adapter against real stores
 node test/acceptance.mjs   # full requirement suite
+npm run test:web          # synthetic-home HTTP, security, math and CLI tests
+npm run test:web:browser  # optional real browser checks; requires Chrome or CHROME_BIN
 ```
+
+The Web tests use temporary, synthetic homes and fake credential values; they do
+not require or publish real transcripts. Browser tests use Chrome's debugging
+protocol, including a different-port forwarding fixture. Screenshots are optional:
+set `WEB_SCREENSHOT`, `WEB_SCREENSHOT_AGENT` or `WEB_SCREENSHOT_MOBILE` to an output
+path outside the repository. Never commit real-session captures or debug logs.
+
+The original acceptance suite also depends on the developer's real stores,
+specific historical search terms and scan timing, so it is not a portable CI
+pass/fail signal on an arbitrary home. Active sessions can change its store
+fingerprints during a run; use the synthetic Web suite for isolated regression.
 
 The acceptance suite runs against real stores and against a synthetic foreign home, and asserts among other things: index counts equal detected counts, FTS rows equal session rows with no orphans, uids are unique, the context stays inside its budget regardless of session length, the handoff contains every required field, unavailable fields are reported honestly, all six adapters detect, index, search and read a home this project has never seen, and no external store file is modified.
 
@@ -313,7 +433,7 @@ npm pack && tar xzf pi-session-hub-*.tgz && pi -e ./package
 - **Claude Code and Codex formats are undocumented.** Parsers are defensive and degrade to filename-derived metadata rather than throwing, but a format change may cost fields until the adapter is updated.
 - **Crush does not record a session working directory**, so those sessions show no repo and cannot be filtered by project.
 - **Claude sub-agent transcripts** are indexed (they contain real work) but marked as not resumable and carry their parent session id in the notes.
-- **Transcripts are capped** at roughly 2000 messages per session by the reader's budget. When that happens the viewer says so rather than silently truncating.
+- **Recovered transcripts are bounded**: adapter limits vary, and Web calls/results are capped at 8k characters per record. Recovery counts and reading-limit notes are shown; the viewer does not promise an unlimited transcript. Grouping does not remove individual recovered records.
 - **Search covers a bounded excerpt**, not the entire history of a very long session. Phrases from beyond the sampled window will not match.
 - The screenshot above is the real UI captured from a synthetic home directory so that every harness appears at once. It is illustrative data, not anyone's actual sessions.
 

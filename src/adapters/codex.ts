@@ -15,8 +15,8 @@ import type {
   ToolUseSummary,
 } from "../types.ts";
 import { emptyFidelity } from "../types.ts";
-import type { NativeResumeAction, SessionAdapter } from "./types.ts";
-import { clip, cleanText } from "../security.ts";
+import type { NativeResumeAction, SessionAdapter, SessionReadOptions } from "./types.ts";
+import { clip, cleanText, cleanTranscriptText } from "../security.ts";
 import {
   addSearchText,
   countTools,
@@ -26,6 +26,8 @@ import {
   parseIso,
   probePath,
   pushCommand,
+  pushToolCall,
+  pushToolResult,
   readTextCapped,
   safeStat,
   searchTextFrom,
@@ -82,10 +84,10 @@ export class CodexAdapter implements SessionAdapter {
     return out;
   }
 
-  async getSession(nativeId: string): Promise<SessionDetail | null> {
+  async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
       if (!file.includes(nativeId)) continue;
-      const parsed = this.parse(file, true);
+      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
       if (!parsed) continue;
       return {
         ...parsed.session,
@@ -109,7 +111,7 @@ export class CodexAdapter implements SessionAdapter {
     };
   }
 
-  private parse(file: string, withMessages: boolean): Parsed | null {
+  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
     const text = readTextCapped(file);
@@ -173,10 +175,12 @@ export class CodexAdapter implements SessionAdapter {
         const rawArgs = payload.arguments ?? payload.input;
         collectPaths(rawArgs, filesChanged, filesRead);
         pushCommand(commands, extractCommand(name, rawArgs));
+        if (withMessages && includeToolActivity) pushToolCall(messages, name, "arguments" in payload ? payload.arguments : payload.input, payload.call_id ?? payload.id);
         continue;
       }
       if (ptype === "custom_tool_call_output" || ptype === "function_call_output") {
         hasToolResults = true;
+        if (withMessages && includeToolActivity) pushToolResult(messages, payload.output, payload.name, payload.call_id);
         continue;
       }
       if (ptype !== "message") continue;
@@ -190,7 +194,7 @@ export class CodexAdapter implements SessionAdapter {
 
       // Boilerplate-only turns (environment_context, skills_instructions) clean
       // down to an empty string. Keep them out of the preview and search body.
-      const clean = clip(cleanText(prose), 4000);
+      const clean = clip(withMessages && preserveFormatting ? cleanTranscriptText(prose) : cleanText(prose), 4000);
       if (!clean) continue;
 
       if (withMessages) {

@@ -80,6 +80,9 @@ export function assertWritableTarget(target: string, home: string): void {
 }
 
 const REDACTIONS: Array<[RegExp, string]> = [
+  // Tool arguments often use quoted JSON keys; the assignment pattern below
+  // cannot match the closing quote between a key and its colon.
+  [/("(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|authorization)"\s*:\s*)"(?:\\.|[^"\\])*"/gi, '$1"[REDACTED]"'],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]"],
   [/\b(sk|pk|rk)-[A-Za-z0-9_-]{12,}/g, "[REDACTED_KEY]"],
   [/\bghp_[A-Za-z0-9]{20,}/g, "[REDACTED_KEY]"],
@@ -108,11 +111,13 @@ export function clip(text: string, max: number): string {
   return text.slice(0, max - 1).trimEnd() + "\u2026";
 }
 
-/**
- * Collapse whitespace and drop obvious boilerplate prefixes so previews and
- * search bodies stay readable. Harnesses inject environment/system reminders
- * into the first user turn, which would otherwise dominate every preview.
- */
+/** Recovered prose keeps Markdown/TeX whitespace; only known boilerplate is removed. */
+export function cleanTranscriptText(text: string): string {
+  const clean = redact(text.replace(/<(system-reminder|environment_context|skills_instructions)>[\s\S]*?<\/\1>/gi, ""));
+  return clean.trim() ? clean : "";
+}
+
+/** Collapse whitespace and boilerplate for list previews and search excerpts. */
 export function cleanText(text: string): string {
   let t = text;
   t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, " ");

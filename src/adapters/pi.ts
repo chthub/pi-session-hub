@@ -13,7 +13,7 @@ import type {
   ToolUseSummary,
 } from "../types.ts";
 import { emptyFidelity } from "../types.ts";
-import type { NativeResumeAction, SessionAdapter } from "./types.ts";
+import type { NativeResumeAction, SessionAdapter, SessionReadOptions } from "./types.ts";
 import {
   addSearchText,
   contentToText,
@@ -25,6 +25,8 @@ import {
   parseIso,
   probePath,
   pushCommand,
+  pushToolResult,
+  pushTranscriptBlocks,
   pushMessage,
   readTextCapped,
   safeStat,
@@ -98,10 +100,10 @@ export class PiAdapter implements SessionAdapter {
     return out;
   }
 
-  async getSession(nativeId: string): Promise<SessionDetail | null> {
+  async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
       if (!file.includes(nativeId)) continue;
-      const parsed = this.parse(file, true);
+      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
       if (!parsed) continue;
       return {
         ...parsed.session,
@@ -130,7 +132,7 @@ export class PiAdapter implements SessionAdapter {
     return null;
   }
 
-  private parse(file: string, withMessages: boolean): Parsed | null {
+  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
     const text = readTextCapped(file);
@@ -217,8 +219,11 @@ export class PiAdapter implements SessionAdapter {
 
       const textPart = contentToText(msg.content);
       if (textPart) addSearchText(searchAcc, role, textPart);
-      if (withMessages) {
-        if (textPart) pushMessage(messages, role, textPart);
+      if (withMessages && includeToolActivity) {
+        if (/tool|function/i.test(role)) pushToolResult(messages, msg.content, msg.toolName, msg.toolCallId ?? msg.tool_call_id, 2000);
+        else pushTranscriptBlocks(messages, role, msg.content, { preserveFormatting, textLimit: 8000, max: 2000 });
+      } else if (withMessages) {
+        if (textPart) pushMessage(messages, role, textPart, 1000, preserveFormatting);
       } else if (role === "user" && messages.length < 3) {
         if (textPart) pushMessage(messages, role, textPart, 3);
       }

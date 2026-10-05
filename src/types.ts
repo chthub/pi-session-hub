@@ -79,6 +79,9 @@ export interface ExternalSession {
 export interface PreviewMessage {
   role: string;
   text: string;
+  /** Source-backed metadata for opt-in tool activity in the Web Viewer. */
+  toolName?: string;
+  toolCallId?: string;
 }
 
 export interface ToolUseSummary {

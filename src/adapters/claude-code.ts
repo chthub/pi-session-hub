@@ -18,10 +18,11 @@ import type {
   ToolUseSummary,
 } from "../types.ts";
 import { emptyFidelity } from "../types.ts";
-import type { NativeResumeAction, SessionAdapter } from "./types.ts";
+import type { NativeResumeAction, SessionAdapter, SessionReadOptions } from "./types.ts";
 import {
   clip,
   cleanText,
+  cleanTranscriptText,
 } from "../security.ts";
 import {
   addSearchText,
@@ -32,6 +33,7 @@ import {
   parseIso,
   probePath,
   pushCommand,
+  pushTranscriptBlocks,
   readTextCapped,
   safeStat,
   searchTextFrom,
@@ -102,10 +104,10 @@ export class ClaudeCodeAdapter implements SessionAdapter {
     return out;
   }
 
-  async getSession(nativeId: string): Promise<SessionDetail | null> {
+  async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
       if (!file.includes(nativeId)) continue;
-      const parsed = this.parse(file, true);
+      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
       if (!parsed) continue;
       return {
         ...parsed.session,
@@ -134,7 +136,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
     };
   }
 
-  private parse(file: string, withMessages: boolean): Parsed | null {
+  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
     const text = readTextCapped(file);
@@ -221,13 +223,18 @@ export class ClaudeCodeAdapter implements SessionAdapter {
       if (role === "user" && !isToolResultCarrier) messageCount++;
       if (role === "assistant") messageCount++;
 
+      if (withMessages && includeToolActivity) {
+        pushTranscriptBlocks(messages, role, content, { preserveFormatting });
+        continue;
+      }
+
       // Only user/assistant *prose* is preview material. Tool result payloads
       // are enormous and would swamp both the preview and the search index.
       if (!isToolResultCarrier) {
         const t = proseOnly(content);
         if (t) addSearchText(searchAcc, role, t);
         if (t) {
-          const clean = clip(cleanText(t), 4000);
+          const clean = clip(withMessages && preserveFormatting ? cleanTranscriptText(t) : cleanText(t), 4000);
           if (clean) {
             if (withMessages) messages.push({ role, text: clean });
             else if (role === "user" && messages.length < 3) {

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Session Hub · 对话记录</title>
+  <link rel="stylesheet" href="/katex/katex.min.css">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">S</span><h1>Session Hub</h1></div>
+    <p id="notice" role="status" aria-live="polite">正在连接本机会话索引…</p>
+    <div class="header-actions">
+      <button id="sidebar-toggle" type="button" aria-controls="session-sidebar" aria-expanded="false">会话列表</button>
+      <button id="theme-toggle" type="button">切换主题</button>
+      <button id="refresh" class="primary-button" type="button">刷新索引</button>
+    </div>
+  </header>
+  <div class="workspace">
+    <aside id="session-sidebar" class="session-sidebar" aria-label="会话列表">
+      <div class="sidebar-controls">
+        <div class="section-heading"><h2>所有会话</h2><span class="eyebrow">本机历史</span></div>
+        <label class="sr-only" for="search">搜索对话</label>
+        <input id="search" type="search" placeholder="搜索标题、对话或项目…" autocomplete="off">
+        <label class="sr-only" for="harness">会话来源</label>
+        <select id="harness">
+          <option value="">全部来源</option>
+          <option value="pi">Pi</option><option value="claude-code">Claude Code</option>
+          <option value="codex">Codex</option><option value="opencode">OpenCode</option>
+          <option value="crush">Crush</option><option value="jcode">JCode</option>
+        </select>
+        <p id="list-status" role="status"></p>
+      </div>
+      <div class="session-scroll"><nav id="sessions" aria-label="选择会话"></nav><button id="more" type="button" hidden>加载更多会话</button></div>
+      <p class="sidebar-footnote">搜索覆盖索引采样内容，不是全部历史正文。</p>
+    </aside>
+    <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭会话列表" hidden></button>
+    <main id="viewer" aria-label="对话正文" tabindex="-1">
+      <div class="empty-state"><span class="empty-mark" aria-hidden="true">↗</span><h2>从一条对话开始</h2><p>选择左侧会话，继续阅读当时的思路。</p><p class="muted">支持 Markdown 和数学公式。右侧目录会列出你的每次提问，随时点击定位。</p></div>
+    </main>
+    <aside id="outline" class="outline" aria-label="当前会话的用户消息目录">
+      <div class="outline-heading"><div class="section-heading"><h2>用户消息</h2><span id="outline-count" class="count-badge">0</span></div><p>按你的提问，快速定位对话</p></div>
+      <div class="outline-search"><label class="sr-only" for="outline-filter">查找当前会话的用户消息</label><input id="outline-filter" type="search" placeholder="在用户消息中查找…" autocomplete="off" disabled></div>
+      <p id="outline-status" class="outline-status" role="status">选择会话后显示目录</p>
+      <nav id="outline-items" aria-label="跳转到用户消息"></nav>
+      <div class="outline-footer"><span id="outline-position">尚未选择会话</span><div class="outline-step"><button id="previous-user" type="button" aria-label="跳转到上一条用户消息" disabled>上一条</button><button id="next-user" type="button" aria-label="跳转到下一条用户消息" disabled>下一条</button></div></div>
+    </aside>
+  </div>
+</body>
+</html>
