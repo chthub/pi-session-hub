@@ -1,3 +1,5 @@
+import type { SessionRef } from "../core/types.ts";
+import type { PiEnvironmentResolution } from "../core/pi-environment.ts";
 import type {
   DetectionResult,
   ExternalSession,
@@ -39,6 +41,10 @@ export interface SessionAdapter {
    * default normalization stays compatible with TUI/context/handoff callers. */
   getSession(nativeId: string, opts?: SessionReadOptions): Promise<SessionDetail | null>;
 
+  /** Exact indexed source: never rediscover a file by substring/native id. */
+  getSessionByRef(ref: SessionRef, opts?: SessionReadOptions): Promise<SessionDetail | null>;
+  buildNativeResumeByRef?(ref: SessionRef): Promise<NativeResumeAction | null>;
+
   /**
    * Native resume command for the original harness, or null when no safe,
    * verified command exists. Never guesses.
@@ -50,6 +56,10 @@ export interface NativeResumeAction {
   command: string;
   args: string[];
   cwd?: string;
+  /** Explicit launch overrides, derived from trusted source metadata or a host picker. */
+  env?: Record<string, string>;
+  /** Pi account/config identity is separate from provider/model identity. */
+  piEnvironment?: PiEnvironmentResolution;
   /**
    * How we know this command line is real. The hub never offers a command it
    * cannot justify, and it says which justification it used.

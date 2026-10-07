@@ -6,6 +6,10 @@
  */
 
 import path from "node:path";
+import { readSessionText } from "./reader.ts";
+import { PiEnvironmentDetector, defaultPiEnvironments, type PiEnvironment, type PiEnvironmentResolution } from "../core/pi-environment.ts";
+import { loadPiEnvironments } from "../core/config.ts";
+import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
   ExternalSession,
@@ -29,7 +33,6 @@ import {
   pushTranscriptBlocks,
   pushMessage,
   listFileSessions,
-  readTextCapped,
   safeStat,
   searchTextFrom,
   titleFromPreview,
@@ -48,6 +51,7 @@ const WRITE_TOOLS = new Set([
 const READ_TOOLS = new Set(["read", "notebookread"]);
 
 interface Parsed {
+  piEnvironment: PiEnvironmentResolution;
   session: ExternalSession;
   messages: { role: string; text: string }[];
   tools: Map<string, number>;
@@ -64,9 +68,13 @@ export class PiAdapter implements SessionAdapter {
   displayName = "Pi";
 
   private readonly root: string;
+  private readonly home: string;
+  private environments: PiEnvironment[];
 
   constructor(home: string) {
+    this.home = home;
     this.root = path.join(home, ".pi", "agent", "sessions");
+    this.environments = defaultPiEnvironments(home);
   }
 
   async detect(): Promise<DetectionResult> {
@@ -96,9 +104,8 @@ export class PiAdapter implements SessionAdapter {
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
-      if (!file.includes(nativeId)) continue;
       const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
-      if (!parsed) continue;
+      if (!parsed || parsed.session.nativeId !== nativeId) continue;
       return {
         ...parsed.session,
         messages: parsed.messages,
@@ -109,28 +116,47 @@ export class PiAdapter implements SessionAdapter {
     return null;
   }
 
+  async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
+    if (ref.harness !== this.id) return null;
+    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity);
+    if (!parsed || parsed.session.uid !== ref.uid) return null;
+    return { ...parsed.session, messages: parsed.messages, tools: toToolSummaries(parsed.tools), commands: parsed.commands };
+  }
+
   async buildNativeResume(nativeId: string): Promise<NativeResumeAction | null> {
+    this.environments = loadPiEnvironments(this.home);
     for (const file of this.files()) {
-      if (!file.includes(nativeId)) continue;
-      return {
-        command: "pi",
-        args: ["--session", file],
-        cwd: path.dirname(file),
-        verificationBasis: "cli-help",
-        verified: true,
-        verificationNote: "flag documented in `pi --help` (--session <path|id>)",
-        requiresConfirmation: true,
-        description: `Open this Pi session in a new pi process (${path.basename(file)})`,
-      };
+      const parsed = this.parse(file, false);
+      if (parsed?.session.nativeId === nativeId) return this.resumeAction(file, parsed);
     }
     return null;
+  }
+
+  async buildNativeResumeByRef(ref: SessionRef): Promise<NativeResumeAction | null> {
+    if (ref.harness !== this.id) return null;
+    this.environments = loadPiEnvironments(this.home);
+    const parsed = this.parse(ref.path, false);
+    if (!parsed || parsed.session.uid !== ref.uid) return null;
+    return this.resumeAction(ref.path, parsed);
+  }
+
+  private resumeAction(file: string, parsed: Parsed): NativeResumeAction {
+    const piEnvironment = parsed.piEnvironment;
+    return { command: "pi", args: ["--session", file], cwd: parsed.session.cwd ?? undefined,
+      piEnvironment,
+      ...(piEnvironment.selected ? { env: { PI_CODING_AGENT_DIR: piEnvironment.selected.agentDir } } : {}),
+      verificationBasis: "cli-help", verified: true,
+      verificationNote: "flag documented in `pi --help` (--session <path|id>)",
+      requiresConfirmation: true, description: `Open this Pi session in a new pi process (${path.basename(file)})` };
   }
 
   private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
-    const text = readTextCapped(file);
-    if (!text) return null;
+    const read = readSessionText(file);
+    if (!read?.content) return null;
+    const text = read.content;
+    const environment = new PiEnvironmentDetector(this.home, this.environments);
 
     let id: string | null = null;
     let cwd: string | null = null;
@@ -159,6 +185,7 @@ export class PiAdapter implements SessionAdapter {
       } catch {
         continue;
       }
+      environment.observe(entry);
       const type = entry.type;
       const ts = parseIso(entry.timestamp);
       if (ts) lastTs = ts;
@@ -249,7 +276,7 @@ export class PiAdapter implements SessionAdapter {
       preview,
       searchText: searchTextFrom(searchAcc),
       fidelity: {
-        ...emptyFidelity(),
+        ...emptyFidelity(read.notes),
         hasToolCalls: toolNames.length > 0,
         hasToolResults,
         hasReasoning,
@@ -261,6 +288,7 @@ export class PiAdapter implements SessionAdapter {
     };
 
     return {
+      piEnvironment: environment.resolve(read.truncated),
       session,
       messages,
       tools: countTools(toolNames),

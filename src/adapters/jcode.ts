@@ -11,6 +11,8 @@
  */
 
 import path from "node:path";
+import { readSessionText } from "./reader.ts";
+import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
   ExternalSession,
@@ -30,7 +32,6 @@ import {
   pushCommand,
   pushTranscriptBlocks,
   listFileSessions,
-  readTextCapped,
   safeStat,
   searchTextFrom,
   titleFromPreview,
@@ -94,10 +95,8 @@ export class JCodeAdapter implements SessionAdapter {
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
-      const base = path.basename(file, ".json");
-      if (base !== nativeId) continue;
       const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
-      if (!parsed) continue;
+      if (!parsed || parsed.session.nativeId !== nativeId) continue;
       return {
         ...parsed.session,
         messages: parsed.messages,
@@ -106,6 +105,13 @@ export class JCodeAdapter implements SessionAdapter {
       };
     }
     return null;
+  }
+
+  async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
+    if (ref.harness !== this.id) return null;
+    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity);
+    if (!parsed || parsed.session.uid !== ref.uid) return null;
+    return { ...parsed.session, messages: parsed.messages, tools: toSummaries(parsed.tools), commands: parsed.commands };
   }
 
   async buildNativeResume(nativeId: string): Promise<NativeResumeAction | null> {
@@ -123,8 +129,9 @@ export class JCodeAdapter implements SessionAdapter {
   private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
-    const text = readTextCapped(file);
-    if (!text) return null;
+    const read = readSessionText(file);
+    if (!read?.content) return null;
+    const text = read.content;
 
     let doc: Record<string, unknown>;
     try {
@@ -201,7 +208,7 @@ export class JCodeAdapter implements SessionAdapter {
       ? `JCode (imported from ${importedFrom}) session ${nativeId.slice(0, 12)}`
       : `JCode session ${nativeId.slice(0, 12)}`;
 
-    const notes: string[] = [];
+    const notes: string[] = [...read.notes];
     if (importedFrom) {
       notes.push(
         `this session was imported into JCode from ${importedFrom}; the original transcript may have had more detail`,

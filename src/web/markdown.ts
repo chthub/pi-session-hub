@@ -78,7 +78,7 @@ md.renderer.rules.hub_math = (tokens, index) => {
       // Chinese labels in \mathrm and subscripts are common in transcripts.
       // KaTeX can render them via fallback fonts; don't turn that warning into
       // a parse failure. Keep other compatibility checks and trust restrictions.
-      strict: (code) => code === "unicodeTextInMathMode" || code === "unknownSymbol" ? "ignore" : "error",
+      strict: (code: string) => code === "unicodeTextInMathMode" || code === "unknownSymbol" ? "ignore" : "error",
       maxExpand: 1000,
       maxSize: 20,
       output: "htmlAndMathml",

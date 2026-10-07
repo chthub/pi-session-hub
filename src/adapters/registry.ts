@@ -82,20 +82,21 @@ export class AdapterRegistry {
     const sessions: ExternalSession[] = [];
     const errors: { harness: HarnessId; message: string }[] = [];
 
+    const adapters = this.active();
     const settled = await Promise.allSettled(
-      this.active().map(async (adapter) => {
+      adapters.map(async (adapter) => {
         const list = await adapter.listSessions({ maxSessions: maxPerHarness });
         return { id: adapter.id, list };
       }),
     );
 
-    for (const result of settled) {
+    for (const [index, result] of settled.entries()) {
       if (result.status === "fulfilled") {
         sessions.push(...result.value.list);
       } else {
         const message =
           result.reason instanceof Error ? result.reason.message : String(result.reason);
-        errors.push({ harness: "pi", message });
+        errors.push({ harness: adapters[index]!.id, message });
       }
     }
 

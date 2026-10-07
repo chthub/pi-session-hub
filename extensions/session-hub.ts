@@ -19,25 +19,15 @@ import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { AdapterRegistry } from "../src/adapters/registry.ts";
+import { SessionHubService } from "../src/core/service.ts";
+import type { HubStatus } from "../src/core/types.ts";
+import { selectPiEnvironment } from "../src/core/pi-environment.ts";
 import { buildTranscriptContext } from "../src/context.ts";
 import { buildHandoff } from "../src/handoff.ts";
 import {
-  distinctRepos,
-  indexCount,
-  lastIndexedAt,
-  openIndex,
-  querySessions,
-  rowToSession,
-  type IndexHandle,
-} from "../src/index/db.ts";
-import { scan } from "../src/index/scan.ts";
-import {
   describeNativeResume,
   launchNativeResume,
-  resolveNativeResume,
 } from "../src/native.ts";
-import { assertWritableTarget, indexDbPath, indexDir } from "../src/security.ts";
 import { badgeFor } from "../src/tui/badges.ts";
 import { HubComponent } from "../src/tui/hub.ts";
 import { TranscriptView } from "../src/tui/transcript.ts";
@@ -49,13 +39,10 @@ export default function sessionHub(pi: ExtensionAPI) {
   // elsewhere. PI_SESSION_HUB_HOME exists for tests and for producing demo
   // screenshots from a synthetic home, never as a normal user-facing setting.
   const home = process.env.PI_SESSION_HUB_HOME || os.homedir();
-  const registry = new AdapterRegistry(home);
-
-  let index: IndexHandle | null = null;
+  let service = new SessionHubService({ home });
+  let status: HubStatus | null = null;
   let detections: DetectionResult[] = [];
   let sessions: ExternalSession[] = [];
-  let lastScanAt = 0;
-  let lastScanError: string | null = null;
 
   /** Floor and ceiling for any context budget, configured or per-call. */
   const CONTEXT_CHARS_MIN = 4_000;
@@ -98,79 +85,27 @@ export default function sessionHub(pi: ExtensionAPI) {
 
   // ------------------------------------------------------------------ index
 
-  function ensureIndexDir(): void {
-    const dir = indexDir(home);
-    assertWritableTarget(dir, home);
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  async function getIndex(): Promise<IndexHandle | null> {
-    if (index) return index;
-    ensureIndexDir();
-    index = await openIndex(indexDbPath(home));
-    return index;
-  }
-
   async function loadDetail(session: ExternalSession) {
-    const adapter = registry.get(session.harness);
-    if (!adapter) return null;
-    try {
-      return await adapter.getSession(session.nativeId);
-    } catch {
-      return null;
-    }
+    try { return await service.getSession(session.uid); }
+    catch { return null; }
   }
 
-  /**
-   * Read sessions from the index, scanning first when needed. Throws with a
-   * readable message instead of silently reporting "no sessions": a failed read
-   * and an empty index are very different situations.
-   */
   async function refresh(ctx: ExtensionContext, force: boolean): Promise<void> {
-    const handle = await getIndex();
-    if (!handle) {
-      sessions = [];
-      throw new Error("could not open the session index");
+    status = await service.getStatus();
+    if (force || status.total === 0) {
+      const result = await ctx.ui.custom<{ errors: string[] }>((tui, theme, _kb, done) => {
+        const loader = new BorderedLoader(tui, theme, force ? "Reindexing all harnesses…" : "Indexing harness sessions…");
+        loader.onAbort = () => done({ errors: [] });
+        service.refresh({ force, maxPerHarness: 2000 })
+          .then(r => done({ errors: r.errors.map(e => `${e.harness}: ${e.message}`) }))
+          .catch(error => done({ errors: [error instanceof Error ? error.message : String(error)] }));
+        return loader;
+      });
+      if (result.errors.length) ctx.ui.notify(`Session hub: some sources could not be read and were left as they were:\n${result.errors.join("\n")}`, "warning");
+      status = await service.getStatus();
     }
-    detections = await registry.detectAll();
-
-    const needScan = force || indexCount(handle) === 0;
-    if (needScan) {
-      const result = await ctx.ui.custom<{ failed: string[]; errors: string[] }>(
-        (tui, theme, _kb, done) => {
-          const loader = new BorderedLoader(
-            tui,
-            theme,
-            force ? "Reindexing all harnesses\u2026" : "Indexing harness sessions\u2026",
-          );
-          loader.onAbort = () => done({ failed: [], errors: [] });
-          scan(handle, registry, { force, maxPerHarness: 2000 })
-            .then((r) => {
-              lastScanAt = Date.now();
-              loader.setMessage?.(`Indexed ${r.total} sessions in ${r.durationMs}ms`);
-              done({
-                failed: r.failed.map(String),
-                errors: r.errors.map((e) => `${e.harness}: ${e.message}`),
-              });
-            })
-            .catch((err) =>
-              done({ failed: [], errors: [err instanceof Error ? err.message : String(err)] }),
-            );
-          return loader;
-        },
-      );
-      lastScanError = result.errors.length ? result.errors.join("; ") : null;
-      if (result.errors.length) {
-        ctx.ui.notify(
-          `Session hub: some sources could not be read and were left as they were:\n${result.errors.join("\n")}`,
-          "warning",
-        );
-      }
-    }
-
-    const rows = querySessions(handle, { limit: 2000 });
-    sessions = rows.map(rowToSession);
-    lastScanAt = lastScanAt || Date.now();
+    detections = status.detections;
+    sessions = await service.listSessions({ limit: 2000 });
   }
 
   /**
@@ -191,7 +126,7 @@ export default function sessionHub(pi: ExtensionAPI) {
   }
 
   function statusLine(): string {
-    const when = lastIndexedAt(index!) ?? null;
+    const when = status?.indexedAt ?? null;
     if (!when) return `${sessions.length} sessions`;
     const secs = Math.round((Date.now() - Date.parse(when)) / 1000);
     const ago = secs < 90 ? `${secs}s` : `${Math.round(secs / 60)}m`;
@@ -237,13 +172,11 @@ export default function sessionHub(pi: ExtensionAPI) {
     let pending: Pending | null = null;
     let reindexRequested = false;
 
-    const handle = index;
-
     const result = await ctx.ui.custom<null>((tui, theme, _kb, done) => {
       const hub = new HubComponent({
         sessions,
         detections,
-        repos: handle ? distinctRepos(handle).map((r) => r.repo) : [],
+        repos: status?.repos ?? [],
         initialHarness: initialHarness ?? null,
         theme,
         requestRender: () => tui.requestRender(),
@@ -528,12 +461,7 @@ export default function sessionHub(pi: ExtensionAPI) {
   }
 
   async function runHandoff(ctx: ExtensionContext, session: ExternalSession): Promise<boolean> {
-    const adapter = registry.get(session.harness);
-    if (!adapter) {
-      ctx.ui.notify("No adapter for this session", "error");
-      return true;
-    }
-    const detail = await adapter.getSession(session.nativeId);
+    const detail = await loadDetail(session);
     if (!detail) {
       ctx.ui.notify("Could not read that transcript", "error");
       return true;
@@ -562,12 +490,8 @@ export default function sessionHub(pi: ExtensionAPI) {
   }
 
   async function runNative(ctx: ExtensionContext, session: ExternalSession): Promise<boolean> {
-    const adapter = registry.get(session.harness);
-    if (!adapter) {
-      ctx.ui.notify("No adapter for this session", "error");
-      return true;
-    }
-    const action = await resolveNativeResume(adapter, session.nativeId);
+    const resolved = await service.resolveResume(session.uid);
+    let action = resolved?.action;
     if (!action) {
       ctx.ui.notify(
         `${HARNESS_LABEL[session.harness]} has no verified resume-by-id command for this ` +
@@ -578,6 +502,14 @@ export default function sessionHub(pi: ExtensionAPI) {
       return true;
     }
 
+    if (action.piEnvironment && !action.piEnvironment.selected) {
+      const environment = action.piEnvironment;
+      const labels = environment.choices.map(choice => `${choice.label} — ${choice.agentDir}`);
+      const selected = await ctx.ui.select(environment.reason, labels);
+      const choice = environment.choices[labels.indexOf(selected ?? "")];
+      if (!choice) { ctx.ui.notify("Cancelled", "info"); return true; }
+      action = selectPiEnvironment(action, choice.id);
+    }
     const ok = await ctx.ui.confirm("Launch native resume?", describeNativeResume(action));
     if (!ok) {
       ctx.ui.notify("Cancelled", "info");
@@ -628,13 +560,8 @@ export default function sessionHub(pi: ExtensionAPI) {
     },
     handler: async (args, ctx) => {
       if (!(await safeRefresh(ctx))) return;
-      const handle = index;
-      if (!handle) {
-        ctx.ui.notify("Index unavailable", "error");
-        return;
-      }
       const { text, harness, limit } = parseSearchArgs(args);
-      const rows = querySessions(handle, { text, harness, limit });
+      const rows = await service.listSessions({ text, harness, limit });
       if (rows.length === 0) {
         ctx.ui.notify(
           `No sessions matched${text ? ` "${text}"` : ""}. Try /session-hub to browse.`,
@@ -643,7 +570,7 @@ export default function sessionHub(pi: ExtensionAPI) {
         return;
       }
       const lines = rows.slice(0, 25).map((r) => {
-        const s = rowToSession(r);
+        const s = r;
         const when = (s.updatedAt ?? s.createdAt ?? "").slice(0, 16).replace("T", " ");
         return `${s.uid}\n    ${when}  ${HARNESS_LABEL[s.harness]}  ${s.repo ?? s.cwd ?? "-"}\n    ${s.title ?? s.preview ?? ""}`;
       });
@@ -668,8 +595,7 @@ export default function sessionHub(pi: ExtensionAPI) {
         ctx.ui.notify(`No session matching "${uid}". Try /session-search.`, "error");
         return;
       }
-      const adapter = registry.get(session.harness);
-      const detail = adapter ? await adapter.getSession(session.nativeId) : null;
+      const detail = await loadDetail(session);
       const body = [
         `Harness:  ${HARNESS_LABEL[session.harness]}`,
         `ID:       ${session.nativeId}`,
@@ -884,19 +810,15 @@ export default function sessionHub(pi: ExtensionAPI) {
           ],
         };
       }
-      const handle = index;
-      if (!handle) {
-        return { content: [{ type: "text" as const, text: "Session index unavailable." }] };
-      }
       const harness =
         typeof params.harness === "string" &&
         (HARNESS_ORDER as string[]).includes(params.harness)
           ? (params.harness as HarnessId)
           : null;
 
-      let rows: ReturnType<typeof querySessions>;
+      let rows: ExternalSession[];
       try {
-        rows = querySessions(handle, {
+        rows = await service.listSessions({
           text: typeof params.query === "string" ? params.query : undefined,
           harness,
           limit: typeof params.limit === "number" ? Math.min(params.limit, 50) : 15,
@@ -919,7 +841,7 @@ export default function sessionHub(pi: ExtensionAPI) {
         : rows;
 
       if (filtered.length === 0) {
-        const total = indexCount(handle);
+        const total = status?.total ?? 0;
         return {
           content: [
             {
@@ -934,7 +856,7 @@ export default function sessionHub(pi: ExtensionAPI) {
         };
       }
 
-      const text = filtered.map((r) => formatSessionBlock(rowToSession(r))).join("\n");
+      const text = filtered.map(formatSessionBlock).join("\n");
 
       return {
         content: [
@@ -942,7 +864,7 @@ export default function sessionHub(pi: ExtensionAPI) {
             type: "text" as const,
             text:
               `${filtered.length} session(s) from the local cross-harness index ` +
-              `(index total: ${indexCount(handle)}).\n\n` +
+              `(index total: ${status?.total ?? 0}).\n\n` +
               `To continue one: call session_hub_context with its id to get the full ` +
               `handoff document, then use that context to answer or continue the work. ` +
               `The user can also run /session-open <id>, /session-handoff <id>, /session-native <id>.\n\n` +
@@ -1135,10 +1057,16 @@ export default function sessionHub(pi: ExtensionAPI) {
     return { text: text || undefined, harness, limit };
   }
 
-  // Keep the index fresh across session reloads without blocking startup.
+  pi.on("session_shutdown", () => { service.close(); });
+
+  // Open the shared index without scanning sources at startup.
   pi.on("session_start", async () => {
+    service.close();
+    service = new SessionHubService({ home });
+    status = null;
+    sessions = [];
     try {
-      await getIndex();
+      await service.init();
     } catch {
       /* non-fatal */
     }

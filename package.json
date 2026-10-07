@@ -61,12 +61,13 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/acceptance.mjs",
+    "test": "node test/acceptance.mjs && node test/scan.mjs && node test/service.mjs && node test/pi-environment.mjs && node test/pi-host.mjs",
     "test:smoke": "node test/smoke.mjs",
     "test:web": "node test/web.mjs && node test/web-open.mjs",
     "test:web:browser": "node test/web-browser.mjs",
     "web": "node bin/web.mjs",
-    "prepublishOnly": "node test/acceptance.mjs"
+    "prepublishOnly": "node test/acceptance.mjs",
+    "test:real": "node test/acceptance.mjs --real"
   },
   "devDependencies": {
     "@types/katex": "^0.16.8",

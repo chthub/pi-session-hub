@@ -10,6 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { assertPiEnvironmentAvailable } from "./core/pi-environment.ts";
 import type { SessionAdapter } from "./adapters/types.ts";
 import type { NativeResumeAction } from "./adapters/types.ts";
 
@@ -37,6 +38,11 @@ export function describeNativeResume(action: NativeResumeAction): string {
     action.description,
     "",
     `  ${formatNativeResume(action)}`,
+    ...(action.piEnvironment?.selected ? [
+      `Pi environment: ${action.piEnvironment.selected.label}`,
+      `PI_CODING_AGENT_DIR=${action.piEnvironment.selected.agentDir}`,
+      `Environment basis: ${action.piEnvironment.reason}`,
+    ] : []),
     "",
     `Verification: ${action.verificationBasis} \u2014 ${action.verificationNote}`,
     "",
@@ -58,8 +64,10 @@ export function launchNativeResume(action: NativeResumeAction): LaunchResult {
     return { ok: false, message: "refusing to launch an unverified command" };
   }
   try {
+    assertPiEnvironmentAvailable(action);
     const child = spawn(action.command, action.args, {
       cwd: action.cwd,
+      env: { ...process.env, ...action.env },
       detached: true,
       stdio: "ignore",
     });

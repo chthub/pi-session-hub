@@ -11,6 +11,8 @@
  */
 
 import path from "node:path";
+import { readSessionText } from "./reader.ts";
+import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
   ExternalSession,
@@ -35,7 +37,6 @@ import {
   pushCommand,
   pushTranscriptBlocks,
   listFileSessions,
-  readTextCapped,
   safeStat,
   searchTextFrom,
   titleFromPreview,
@@ -100,9 +101,8 @@ export class ClaudeCodeAdapter implements SessionAdapter {
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
-      if (!file.includes(nativeId)) continue;
       const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
-      if (!parsed) continue;
+      if (!parsed || parsed.session.nativeId !== nativeId) continue;
       return {
         ...parsed.session,
         messages: parsed.messages,
@@ -113,12 +113,19 @@ export class ClaudeCodeAdapter implements SessionAdapter {
     return null;
   }
 
+  async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
+    if (ref.harness !== this.id) return null;
+    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity);
+    if (!parsed || parsed.session.uid !== ref.uid) return null;
+    return { ...parsed.session, messages: parsed.messages, tools: toSummaries(parsed.tools), commands: parsed.commands };
+  }
+
   async buildNativeResume(nativeId: string): Promise<NativeResumeAction | null> {
     // `claude --resume <id>` only accepts top-level session ids. Subagent
     // transcripts have ids that the CLI will not resolve, so we refuse rather
     // than hand the user a command that fails.
-    const file = this.files().find((f) => f.includes(nativeId));
-    if (file && isSubagentPath(file)) return null;
+    const file = this.files().find((f) => this.parse(f, false)?.session.nativeId === nativeId);
+    if (!file || isSubagentPath(file)) return null;
     return {
       command: "claude",
       args: ["--resume", nativeId],
@@ -130,11 +137,20 @@ export class ClaudeCodeAdapter implements SessionAdapter {
     };
   }
 
+  async buildNativeResumeByRef(ref: SessionRef): Promise<NativeResumeAction | null> {
+    if (isSubagentPath(ref.path) || !(await this.getSessionByRef(ref))) return null;
+    return { command: "claude", args: ["--resume", ref.nativeId],
+      verificationBasis: "cli-help", verified: true,
+      verificationNote: "flag documented in `claude --help` (--resume <session-id>)",
+      requiresConfirmation: true, description: `Resume session ${ref.nativeId.slice(0, 8)} with Claude Code` };
+  }
+
   private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
-    const text = readTextCapped(file);
-    if (!text) return null;
+    const read = readSessionText(file);
+    if (!read?.content) return null;
+    const text = read.content;
 
     let id: string | null = null;
     let cwd: string | null = null;
@@ -271,10 +287,11 @@ export class ClaudeCodeAdapter implements SessionAdapter {
           ...emptyFidelity(
             isSub
               ? [
+                  ...read.notes,
                   `sub-agent transcript: not resumable with \`claude --resume\``,
                   ...(parentSessionId ? [`parent session: ${parentSessionId}`] : []),
                 ]
-              : [],
+              : read.notes,
           ),
           hasToolCalls: toolNames.length > 0,
           hasToolResults,

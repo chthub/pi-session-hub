@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { readSessionText, SESSION_READ_LIMIT } from "./reader.ts";
 import path from "node:path";
 import type { ExternalSession, PreviewMessage } from "../types.ts";
 import type { ListOptions } from "./types.ts";
@@ -118,28 +119,8 @@ export function listFileSessions(
  * Read a text file with a byte ceiling. Returns null when unreadable.
  * Session files can be megabytes; the cap protects against pathological ones.
  */
-export function readTextCapped(p: string, maxBytes = 64 * 1024 * 1024): string | null {
-  const st = safeStat(p);
-  if (!st) return null;
-  if (st.size > maxBytes) {
-    try {
-      const fd = fs.openSync(p, "r");
-      try {
-        const buf = Buffer.alloc(maxBytes);
-        const read = fs.readSync(fd, buf, 0, maxBytes, 0);
-        return buf.subarray(0, read).toString("utf8");
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch {
-      return null;
-    }
-  }
-  try {
-    return fs.readFileSync(p, "utf8");
-  } catch {
-    return null;
-  }
+export function readTextCapped(p: string, maxBytes = SESSION_READ_LIMIT): string | null {
+  return readSessionText(p, maxBytes)?.content ?? null;
 }
 
 /** Parse a JSONL blob, skipping malformed lines (including a torn last line). */

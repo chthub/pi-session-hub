@@ -8,6 +8,8 @@
  */
 
 import path from "node:path";
+import { readSessionText } from "./reader.ts";
+import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
   ExternalSession,
@@ -29,7 +31,6 @@ import {
   pushToolCall,
   pushToolResult,
   listFileSessions,
-  readTextCapped,
   safeStat,
   searchTextFrom,
   titleFromPreview,
@@ -80,9 +81,8 @@ export class CodexAdapter implements SessionAdapter {
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
-      if (!file.includes(nativeId)) continue;
       const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
-      if (!parsed) continue;
+      if (!parsed || parsed.session.nativeId !== nativeId) continue;
       return {
         ...parsed.session,
         messages: parsed.messages,
@@ -91,6 +91,13 @@ export class CodexAdapter implements SessionAdapter {
       };
     }
     return null;
+  }
+
+  async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
+    if (ref.harness !== this.id) return null;
+    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity);
+    if (!parsed || parsed.session.uid !== ref.uid) return null;
+    return { ...parsed.session, messages: parsed.messages, tools: toSummaries(parsed.tools), commands: parsed.commands };
   }
 
   async buildNativeResume(nativeId: string): Promise<NativeResumeAction | null> {
@@ -108,8 +115,9 @@ export class CodexAdapter implements SessionAdapter {
   private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
-    const text = readTextCapped(file);
-    if (!text) return null;
+    const read = readSessionText(file);
+    if (!read?.content) return null;
+    const text = read.content;
 
     let id: string | null = null;
     let cwd: string | null = null;
@@ -223,7 +231,7 @@ export class CodexAdapter implements SessionAdapter {
         preview: preview ? clip(preview, 160) : null,
         searchText: searchTextFrom(searchAcc),
         fidelity: {
-          ...emptyFidelity(),
+          ...emptyFidelity(read.notes),
           hasToolCalls: toolNames.length > 0,
           hasToolResults,
           hasReasoning,

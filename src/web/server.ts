@@ -5,35 +5,22 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { AdapterRegistry } from "../adapters/registry.ts";
-import { openIndex, querySessions, type IndexedSessionRow } from "../index/db.ts";
-import { scan } from "../index/scan.ts";
-import { indexDbPath, redact } from "../security.ts";
+import { SessionHubService } from "../core/service.ts";
 import { HARNESS_ORDER, type HarnessId } from "../types.ts";
-import { renderMarkdown, renderPlainText } from "./markdown.ts";
+import { sanitize, sessionSummary, viewerDetail } from "./presentation.ts";
 
 const require = createRequire(import.meta.url);
 const publicDir = fileURLToPath(new URL("./public/", import.meta.url));
 const katexDir = path.join(path.dirname(require.resolve("katex/package.json")), "dist");
 const assets = new Map<string, { file: string; type: string }>([
   ["/", { file: path.join(publicDir, "index.html"), type: "text/html; charset=utf-8" }],
+  ["/transport.js", { file: path.join(publicDir, "transport.js"), type: "text/javascript; charset=utf-8" }],
   ["/app.js", { file: path.join(publicDir, "app.js"), type: "text/javascript; charset=utf-8" }],
   ["/style.css", { file: path.join(publicDir, "style.css"), type: "text/css; charset=utf-8" }],
   ["/katex/katex.min.css", { file: path.join(katexDir, "katex.min.css"), type: "text/css; charset=utf-8" }],
 ]);
 for (const font of fs.readdirSync(path.join(katexDir, "fonts"))) {
   if (font.endsWith(".woff2")) assets.set(`/katex/fonts/${font}`, { file: path.join(katexDir, "fonts", font), type: "font/woff2" });
-}
-
-function sanitize<T>(value: T): T {
-  // Redact all string fields, including source metadata, not just message bodies.
-  return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "string" ? redact(item) : item));
-}
-
-function summary(row: IndexedSessionRow) {
-  return sanitize({ uid: row.uid, harness: row.harness, title: row.title, preview: row.preview,
-    repo: row.repo ?? row.cwd, model: row.model, updatedAt: row.updated_at ?? row.created_at,
-    messageCount: row.message_count });
 }
 
 class RequestError extends Error {}
@@ -60,16 +47,10 @@ export async function startWebViewer(options: { home?: string; port?: number } =
   const home = options.home ?? os.homedir();
   const port = options.port ?? 43123;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("端口必须是 0–65535 的整数");
-  const index = await openIndex(indexDbPath(home));
-  if (!index) throw new Error("无法打开本地会话索引");
-  const registry = new AdapterRegistry(home);
+  const service = new SessionHubService({ home });
+  await service.init();
   const token = randomBytes(32).toString("hex");
-  let report: Awaited<ReturnType<typeof scan>>;
-  let refreshing: Promise<void> | undefined;
-  const refresh = () => {
-    if (!refreshing) refreshing = scan(index, registry).then(result => { report = result; }).finally(() => { refreshing = undefined; });
-    return refreshing;
-  };
+  const refresh = () => service.refresh();
   const json = (res: http.ServerResponse, status: number, value: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(sanitize(value)));
@@ -103,11 +84,12 @@ export async function startWebViewer(options: { home?: string; port?: number } =
         json(res, 401, { error: "访问令牌无效，请使用启动时显示的完整链接" }); return;
       }
       if (url.pathname === "/api/refresh" && req.method === "POST") {
-        await refresh(); json(res, 200, report); return;
+        json(res, 200, await refresh()); return;
       }
       if (req.method !== "GET") { json(res, 405, { error: "方法不允许" }); return; }
       if (url.pathname === "/api/status") {
-        json(res, 200, { scan: report, harnesses: HARNESS_ORDER }); return;
+        const status = await service.getStatus();
+        json(res, 200, { scan: status.scan, harnesses: status.harnesses }); return;
       }
       if (url.pathname === "/api/sessions") {
         const harness = url.searchParams.get("harness");
@@ -116,20 +98,14 @@ export async function startWebViewer(options: { home?: string; port?: number } =
         const offset = integer(url.searchParams.get("offset"), 0, 1000000);
         const text = url.searchParams.get("q") ?? "";
         if (text.length > 1000 || limit === 0) { json(res, 400, { error: "查询参数无效" }); return; }
-        const rows = querySessions(index, { text, harness: harness as HarnessId | null, limit: limit + 1, offset });
-        json(res, 200, { sessions: rows.slice(0, limit).map(summary), hasMore: rows.length > limit }); return;
+        const rows = await service.listSessions({ text, harness: harness as HarnessId | null, limit: limit + 1, offset });
+        json(res, 200, { sessions: rows.slice(0, limit).map(sessionSummary), hasMore: rows.length > limit }); return;
       }
       if (url.pathname === "/api/session") {
         // Resolve only an indexed UID. Never accept a caller-supplied filesystem path.
-        const row = index.db.get<IndexedSessionRow>("select * from sessions where uid = ?", [url.searchParams.get("uid") ?? ""]);
-        if (!row) { json(res, 404, { error: "会话不存在，请刷新索引" }); return; }
-        const detail = await registry.get(row.harness)?.getSession(row.native_id, { preserveFormatting: true, includeToolActivity: true });
-        if (!detail || detail.uid !== row.uid) { json(res, 404, { error: "源会话已消失或无法读取" }); return; }
-        const { searchText: _searchText, ...metadata } = detail;
-        json(res, 200, { ...metadata, messages: detail.messages.map(message => ({
-          ...message,
-          html: /tool|function/i.test(message.role) ? renderPlainText(message.text) : renderMarkdown(message.text),
-        })) }); return;
+        const detail = await service.getSession(url.searchParams.get("uid") ?? "", { preserveFormatting: true, includeToolActivity: true });
+        if (!detail) { json(res, 404, { error: "源会话已消失或无法读取，请刷新索引" }); return; }
+        json(res, 200, viewerDetail(detail)); return;
       }
       json(res, 404, { error: "接口不存在" });
     })().catch(error => {
@@ -147,7 +123,7 @@ export async function startWebViewer(options: { home?: string; port?: number } =
     if (!address || typeof address === "string") throw new Error("无法确定监听端口");
     actualPort = address.port;
   } catch (error) {
-    index.close(); throw error;
+    service.close(); throw error;
   }
   let closing: Promise<void> | undefined;
   return {
@@ -157,8 +133,7 @@ export async function startWebViewer(options: { home?: string; port?: number } =
         const stopped = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
         server.closeIdleConnections();
         await stopped;
-        await refreshing;
-        index.close();
+        service.close();
       })();
       return closing;
     },

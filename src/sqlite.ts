@@ -120,13 +120,9 @@ export async function openReadOnly(file: string): Promise<ReadOnlyDb | null> {
   try {
     db = new mod.DatabaseSync(file, { readOnly: true });
   } catch {
-    // WAL databases can refuse a read-only open when the -shm file is missing
-    // and cannot be created. Retry without the hint; we only ever issue SELECTs.
-    try {
-      db = new mod.DatabaseSync(file, { readOnly: false });
-    } catch {
-      return null;
-    }
+    // Fail closed: a writable fallback can create WAL/SHM files in foreign
+    // stores even if the caller only issues SELECTs.
+    return null;
   }
 
   const inner = wrap(db as never, `sqlite(${file})`);

@@ -1,7 +1,7 @@
 /**
  * Acceptance tests for pi-session-hub.
  *
- * These run against the real stores on this machine, not fixtures. They assert
+ * These default to isolated synthetic stores (--real opts into real stores). They assert
  * the user-facing requirements: every harness is discovered, the index matches
  * the sources, search works, the handoff never invents fields, and nothing
  * outside the extension's own directory is ever written.
@@ -28,8 +28,14 @@ import { scan } from "../src/index/scan.ts";
 import { assertWritableTarget, indexDir, isDeniedPath, redact } from "../src/security.ts";
 import { HARNESS_ORDER } from "../src/types.ts";
 import { buildFakeHome } from "./fixtures/fake-home.mjs";
+import { buildAcceptanceHome } from "./fixtures/acceptance-home.mjs";
 
-const home = os.homedir();
+const syntheticHome = process.argv.includes("--real") ? null : fs.mkdtempSync(path.join(os.tmpdir(), "hub-acceptance-"));
+if (syntheticHome) {
+  process.on("exit", () => fs.rmSync(syntheticHome, { recursive: true, force: true }));
+  await buildAcceptanceHome(syntheticHome);
+}
+const home = syntheticHome ?? os.homedir();
 const indexPath = path.join(indexDir(home), "index.sqlite");
 
 let passed = 0;

@@ -14,6 +14,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
   ExternalSession,
@@ -96,7 +97,10 @@ export class OpenCodeAdapter implements SessionAdapter {
   async listSessions(opts?: { maxSessions?: number }): Promise<ExternalSession[]> {
     const limit = opts?.maxSessions ?? 2000;
     const db = await openReadOnly(this.dbPath);
-    if (!db) return [];
+    if (!db) {
+      if (probePath(this.dbPath) !== "missing") throw new Error("could not open source database strictly read-only");
+      return [];
+    }
     try {
       const rows = db.all<SessionRow>(
         `select id, title, directory, model, time_created, time_updated,
@@ -211,6 +215,11 @@ export class OpenCodeAdapter implements SessionAdapter {
     } finally {
       db.close();
     }
+  }
+
+  async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
+    if (ref.harness !== this.id || ref.path !== this.dbPath) return null;
+    return this.getSession(ref.nativeId, opts);
   }
 
   async buildNativeResume(nativeId: string): Promise<NativeResumeAction | null> {

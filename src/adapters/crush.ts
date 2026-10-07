@@ -10,6 +10,7 @@
  */
 
 import path from "node:path";
+import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
   ExternalSession,
@@ -83,7 +84,10 @@ export class CrushAdapter implements SessionAdapter {
   async listSessions(opts?: { maxSessions?: number }): Promise<ExternalSession[]> {
     const limit = opts?.maxSessions ?? 2000;
     const db = await openReadOnly(this.dbPath);
-    if (!db) return [];
+    if (!db) {
+      if (probePath(this.dbPath) !== "missing") throw new Error("could not open source database strictly read-only");
+      return [];
+    }
     try {
       const rows = db.all<SessionRow>(
         `select id, title, message_count, created_at, updated_at
@@ -159,6 +163,11 @@ export class CrushAdapter implements SessionAdapter {
     }
   }
 
+  async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
+    if (ref.harness !== this.id || ref.path !== this.dbPath) return null;
+    return this.getSession(ref.nativeId, opts);
+  }
+
   async buildNativeResume(nativeId: string): Promise<NativeResumeAction | null> {
     return {
       command: "crush",
@@ -172,7 +181,7 @@ export class CrushAdapter implements SessionAdapter {
   }
 
   private toSession(
-    db: ReturnType<typeof openReadOnly> extends Promise<infer T> ? T : never,
+    db: NonNullable<Awaited<ReturnType<typeof openReadOnly>>>,
     r: SessionRow,
     stat: { mtimeMs: number; size: number } | null,
   ): ExternalSession {
