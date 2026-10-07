@@ -1,4 +1,6 @@
 node_modules/
+vscode-extension/dist/
+vscode-extension/*.vsix
 npm-debug.log*
 *.log
 .DS_Store

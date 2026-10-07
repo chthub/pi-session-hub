@@ -57,17 +57,20 @@
     "src",
     "skills",
     "test",
+    "vscode-extension/src/projectScope.ts",
+    "vscode-extension/README.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/acceptance.mjs && node test/scan.mjs && node test/service.mjs && node test/pi-environment.mjs && node test/pi-host.mjs",
+    "test": "node test/acceptance.mjs && node test/scan.mjs && node test/service.mjs && node test/workspace.mjs && node test/pi-environment.mjs && node test/pi-host.mjs",
+    "test:real": "node test/acceptance.mjs --real",
+    "test:vscode": "npm run check --prefix vscode-extension && npm run build --prefix vscode-extension && node test/vscode.mjs",
     "test:smoke": "node test/smoke.mjs",
     "test:web": "node test/web.mjs && node test/web-open.mjs",
     "test:web:browser": "node test/web-browser.mjs",
     "web": "node bin/web.mjs",
-    "prepublishOnly": "node test/acceptance.mjs",
-    "test:real": "node test/acceptance.mjs --real"
+    "prepublishOnly": "node test/acceptance.mjs"
   },
   "devDependencies": {
     "@types/katex": "^0.16.8",

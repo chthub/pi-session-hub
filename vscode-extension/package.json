@@ -1,0 +1,50 @@
+{
+  "name": "pi-session-hub-vscode",
+  "displayName": "Session Hub",
+  "description": "Browse local coding-agent history and resume in native terminals, including over Remote SSH.",
+  "version": "0.1.0",
+  "publisher": "chthub",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/chthub/pi-session-hub" },
+  "engines": { "vscode": "^1.99.0" },
+  "extensionKind": ["workspace"],
+  "categories": ["Other"],
+  "main": "./dist/extension.cjs",
+  "activationEvents": ["onView:sessionHub.sessions"],
+  "capabilities": { "untrustedWorkspaces": { "supported": false }, "virtualWorkspaces": false },
+  "contributes": {
+    "viewsContainers": { "activitybar": [{ "id": "sessionHub", "title": "Session Hub", "icon": "media/session-hub.svg" }] },
+    "views": { "sessionHub": [{ "id": "sessionHub.sessions", "name": "会话历史" }] },
+    "commands": [
+      { "command": "sessionHub.refresh", "title": "Session Hub: 刷新索引", "icon": "$(refresh)" },
+      { "command": "sessionHub.open", "title": "Session Hub: 打开会话" },
+      { "command": "sessionHub.resume", "title": "Session Hub: 在终端中继续" },
+      { "command": "sessionHub.copyId", "title": "Session Hub: 复制会话 ID" }
+    ],
+    "menus": {
+      "view/title": [{ "command": "sessionHub.refresh", "when": "view == sessionHub.sessions", "group": "navigation" }],
+      "view/item/context": [
+        { "command": "sessionHub.open", "when": "view == sessionHub.sessions && viewItem == session", "group": "1_open" },
+        { "command": "sessionHub.resume", "when": "view == sessionHub.sessions && viewItem == session", "group": "1_open" },
+        { "command": "sessionHub.copyId", "when": "view == sessionHub.sessions && viewItem == session", "group": "2_copy" }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "tsc --noEmit",
+    "vscode:prepublish": "npm run check && npm run build",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.99.0",
+    "@types/node": "^22.20.5",
+    "@types/katex": "^0.16.8",
+    "@types/markdown-it": "^14.2.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0",
+    "katex": "^0.19.0",
+    "markdown-it": "^14.1.0"
+  }
+}

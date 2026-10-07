@@ -24,6 +24,11 @@
   --hover: #25303b; --shadow: #00000020; --on-accent: #142925;
 }
 * { box-sizing: border-box; }
+/* VS Code owns the session list. Keep only conversation + outline in panels. */
+body[data-host="vscode"] .workspace { grid-template-columns: minmax(0, 1fr) 252px; }
+body[data-host="vscode"] #session-sidebar,
+body[data-host="vscode"] #sidebar-toggle,
+body[data-host="vscode"] #sidebar-backdrop { display: none; }
 body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; font: 15px/1.75 var(--font-ui); color: var(--text); background: var(--bg); overflow-wrap: anywhere; }
 button, input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 8px 12px; }
 button { cursor: pointer; transition: background .15s, border-color .15s; }
@@ -79,6 +84,9 @@ main { padding: 24px 28px 48px; overflow-y: auto; min-width: 0; min-height: 0; b
 .transcript-toolbar { position: sticky; top: -24px; z-index: 2; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 -1px 18px; padding: 12px 0; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 12px; }
 .toolbar-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .transcript-toolbar button { padding: 5px 9px; font-size: 12px; }
+.resume-button { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; }
+.resume-button:hover { color: var(--on-accent); background: var(--accent); border-color: var(--accent); filter: brightness(.94); }
+.button-icon { font-size: 11px; line-height: 1; }
 .transcript-count { color: var(--muted); }
 .message { margin: 0 0 18px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 12px; min-width: 0; scroll-margin-top: 76px; }
 .message-user { background: var(--user-bg); border-left: 3px solid var(--accent); }
@@ -145,6 +153,7 @@ blockquote { border-left: 3px solid var(--border); margin-left: 0; padding-left:
   .brand-mark { width: 26px; height: 26px; font-size: 16px; }
   .header-actions { gap: 4px; } .header-actions button { font-size: 11px; padding: 4px 6px; }
   #notice { grid-column: 1 / -1; grid-row: 2; font-size: 11px; }
+  body[data-host="vscode"] .workspace { grid-template-columns: minmax(0, 1fr); }
   .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 238px; }
   main { padding: 16px 14px 32px; }
   .session-heading { font-size: 19px; }

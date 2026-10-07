@@ -1,11 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const incoming = new URLSearchParams(location.hash.slice(1)).get("token");
-if (incoming) {
-  sessionStorage.setItem("session-hub-token", incoming);
-  history.replaceState(null, "", location.pathname + location.search);
-}
-const token = sessionStorage.getItem("session-hub-token");
+const transport = window.sessionHubTransport;
 const harnessLabels = { pi: "Pi", "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", crush: "Crush", jcode: "JCode" };
 let sessions = [];
 let selected = null;
@@ -49,15 +44,8 @@ function notice(text, error = false) {
   $("notice").title = text;
   $("notice").classList.toggle("error", error);
 }
-async function api(path, method = "GET") {
-  if (!token) throw new Error("请使用启动时显示的完整链接（包含访问令牌）。");
-  const response = await fetch(path, { method, headers: { Authorization: `Bearer ${token}` }, cache: "no-store", credentials: "omit" });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? `请求失败：${response.status}`);
-  return data;
-}
 async function loadStatus() {
-  const data = await api("/api/status");
+  const data = await transport.status();
   const warnings = data.scan.errors.map(item => `${item.harness}: ${item.message}`).join("；");
   notice(`已连接 · ${data.scan.total} 条本机会话 · 正文不会上传${warnings ? " · 部分来源读取失败：" + warnings : ""}`, Boolean(warnings));
 }
@@ -88,9 +76,9 @@ async function loadList(append = false) {
   const version = ++listVersion;
   $("more").disabled = true;
   $("list-status").textContent = "正在搜索…";
-  const query = new URLSearchParams({ q: $("search").value, harness: $("harness").value, limit: "50", offset: String(append ? sessions.length : 0) });
+  const query = { q: $("search").value, harness: $("harness").value, limit: "50", offset: String(append ? sessions.length : 0) };
   try {
-    const result = await api(`/api/sessions?${query}`);
+    const result = await transport.listSessions(query);
     if (version !== listVersion) return;
     sessions = append ? sessions.concat(result.sessions) : result.sessions;
     renderList();
@@ -279,6 +267,18 @@ function renderDetail(restore = null) {
   });
   toggle.setAttribute("aria-pressed", String(raw));
   actions.append(toggle, button("回到开头", () => viewer.scrollTo({ top: 0 })), button("跳到末尾", () => viewer.scrollTo({ top: viewer.scrollHeight })));
+  for (const action of transport.sessionActions) {
+    const control = button(action.label, async () => {
+      try { await action.run(selected); }
+      catch (error) { notice(error.message, true); }
+    }, action.className);
+    if (action.icon) {
+      const icon = element("span", action.icon, "button-icon");
+      icon.setAttribute("aria-hidden", "true");
+      control.prepend(icon);
+    }
+    actions.append(control);
+  }
   toolbar.append(element("span", "对话正文", "transcript-count"), actions);
   content.append(toolbar);
   for (let index = 0; index < detail.messages.length; index++) {
@@ -326,12 +326,11 @@ async function openSession(uid) {
   renderList(true);
   $("viewer").replaceChildren(element("p", "正在读取对话…", "muted"));
   try {
-    const result = await api(`/api/session?${new URLSearchParams({ uid })}`);
+    const result = await transport.getSession(uid);
     if (version !== detailVersion) return;
     detail = result;
     renderDetail();
     $("viewer").scrollTop = 0;
-    $("viewer").focus({ preventScroll: true });
     scheduleMeasure();
   } catch (error) {
     if (version === detailVersion) {
@@ -378,11 +377,11 @@ $("refresh").addEventListener("click", async () => {
   $("refresh").disabled = true;
   notice("正在扫描本机会话…");
   try {
-    await api("/api/refresh", "POST");
+    await transport.refresh();
     await loadStatus();
-    await loadList();
+    if (transport.hasSessionList) await loadList();
     if (selected) await openSession(selected);
   } catch (error) { notice(`刷新失败：${error.message}`, true); }
   finally { $("refresh").disabled = false; }
 });
-loadStatus().then(() => loadList()).catch(error => notice(error.message, true));
+loadStatus().then(() => transport.initialUid ? openSession(transport.initialUid) : loadList()).catch(error => notice(error.message, true));

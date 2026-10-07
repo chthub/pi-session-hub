@@ -108,6 +108,7 @@ try {
   await wait('document.querySelectorAll(".katex-display").length > 0');
   await evaluate("document.fonts.ready.then(() => true)");
   check("browser renders inline and multiline math", await evaluate('document.querySelectorAll(".katex").length >= 2 && document.querySelector(".katex-display").getBoundingClientRect().height > 20'));
+  check("opening a session does not auto-focus or outline the reading pane", await evaluate('document.activeElement !== document.querySelector("#viewer") && getComputedStyle(document.querySelector("#viewer")).outlineStyle === "none"'));
   check("code remains literal", await evaluate('document.querySelector("code.language-tex").textContent.includes("$x$ and $$y$$")'));
   check("transcript scripts and images never execute", await evaluate('!window.transcriptExecuted && document.querySelectorAll("#viewer img, #viewer script").length === 0'));
   check("secrets not displayed", await evaluate('!document.querySelector("#viewer").textContent.includes("supersecret")'));
@@ -214,6 +215,15 @@ try {
   check("dark theme has explicit background", await evaluate('getComputedStyle(document.body).backgroundColor === "rgb(20, 24, 32)"'));
   await evaluate('document.querySelector("#theme-toggle").click()');
   check("theme control switches back to light", await evaluate('document.documentElement.dataset.theme === "light" && getComputedStyle(document.body).backgroundColor === "rgb(244, 247, 249)"'));
+  // Exercise the shared toolbar with the same action metadata as VS Code.
+  await evaluate('transport.sessionActions = [{ label: "在终端中继续", icon: "▶", className: "primary-button resume-button", run: () => { window.resumeTestClicks = (window.resumeTestClicks || 0) + 1; } }]; renderDetail()');
+  check("resume button has green background and decorative play icon in light mode", await evaluate('(() => { const button = document.querySelector(".resume-button"); const css = getComputedStyle(button); return button.classList.contains("primary-button") && css.backgroundColor === "rgb(40, 123, 118)" && css.color === "rgb(255, 255, 255)" && button.querySelector(".button-icon").textContent === "▶" && button.querySelector(".button-icon").getAttribute("aria-hidden") === "true" && button.textContent.includes("在终端中继续"); })()'));
+  await evaluate('document.querySelector(".resume-button").click()');
+  check("styled resume action remains functional", await evaluate('window.resumeTestClicks === 1'));
+  await evaluate('document.documentElement.dataset.theme = "dark"');
+  await wait('getComputedStyle(document.querySelector(".resume-button")).backgroundColor === "rgb(128, 212, 199)"');
+  check("resume button keeps contrasting green background in dark mode", await evaluate('(() => { const css = getComputedStyle(document.querySelector(".resume-button")); return css.backgroundColor === "rgb(128, 212, 199)" && css.color === "rgb(20, 41, 37)"; })()'));
+  await evaluate('document.documentElement.dataset.theme = "light"');
   check("viewer makes no remote requests", requests.every(url => url.startsWith(new URL(forward.url).origin)));
   check("no browser JS exceptions", exceptions.length === 0);
   check("no failed resource requests", failures.length === 0);
