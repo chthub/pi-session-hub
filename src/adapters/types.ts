@@ -8,6 +8,9 @@ import type {
 export interface ListOptions {
   /** Hard cap on sessions returned by a single adapter. */
   maxSessions?: number;
+  /** File-backed scans may reuse indexed metadata before reading the source.
+   * Return null to read/parse the file normally. */
+  reuseUnchanged?: (path: string, stat: { mtimeMs: number; size: number }) => ExternalSession | null;
 }
 
 export interface SessionReadOptions {

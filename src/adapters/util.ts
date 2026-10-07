@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { PreviewMessage } from "../types.ts";
+import type { ExternalSession, PreviewMessage } from "../types.ts";
+import type { ListOptions } from "./types.ts";
 import { clip, cleanText, cleanTranscriptText, redact } from "../security.ts";
 
 export interface StatInfo {
@@ -88,6 +89,28 @@ export function walkFiles(root: string, opts: WalkOptions = {}): string[] {
   };
 
   visit(root, 0);
+  return out;
+}
+
+/** List file-backed metadata, checking the scan cache before reading content. */
+export function listFileSessions(
+  files: string[],
+  parse: (file: string) => ExternalSession | null,
+  opts: ListOptions = {},
+): ExternalSession[] {
+  const out: ExternalSession[] = [];
+  const limit = opts.maxSessions ?? 5000;
+  for (const file of files) {
+    if (out.length >= limit) break;
+    let session: ExternalSession | null = null;
+    if (opts.reuseUnchanged) {
+      const stat = safeStat(file);
+      if (!stat) continue;
+      session = opts.reuseUnchanged(file, stat);
+    }
+    session ??= parse(file);
+    if (session) out.push(session);
+  }
   return out;
 }
 

@@ -114,7 +114,7 @@ pi -e /path/to/pi-session-hub
 
    Or type `/session-hub`, or `/hub`. The hub replaces Pi's UI area rather than floating over the chat. For a true alternate-screen takeover, set Pi's own `tuiMode` to `"fullscreen"` in `~/.pi/agent/settings.json`.
 
-3. The first run indexes your harnesses. Scan time depends on store size and filesystem speed; later scans reuse unchanged index entries, but still read source metadata.
+3. The first run indexes your harnesses. Scan time depends on store size and filesystem speed. Later scans still walk directories and check file size/modification time, but Pi, Claude Code, Codex and JCode reuse unchanged index entries without reading or parsing their source content. OpenCode and Crush continue to read their databases on each scan; an explicit force reindex also rereads every source. Existing indexes upgrade automatically. If multiple files share a session ID, older indexes may need a one-time read to associate those source paths with the session before they can be reused.
 
 4. Pick a session and press `Enter`. The conversation is loaded into the current chat:
 
@@ -368,6 +368,7 @@ Verified against the running binary rather than assumed:
 ## Development
 
 ```bash
+node test/scan.mjs         # isolated incremental-scan regression tests
 node test/smoke.mjs        # exercise every adapter against real stores
 node test/acceptance.mjs   # full requirement suite
 npm run test:web          # synthetic-home HTTP, security, math and CLI tests

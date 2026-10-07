@@ -11,7 +11,7 @@ import path from "node:path";
 import type { ExternalSession, HarnessId, SessionDetail } from "../types.ts";
 import { exec, openIndexDb, type ReadOnlyDb } from "../sqlite.ts";
 
-export const SCHEMA_VERSION = "1";
+export const SCHEMA_VERSION = "2";
 
 export interface IndexedSessionRow {
   uid: string;
@@ -71,6 +71,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS sources (
      harness TEXT NOT NULL,
      path TEXT NOT NULL,
+     uid TEXT,
      mtime_ms REAL,
      size INTEGER,
      PRIMARY KEY (harness, path)
@@ -99,6 +100,16 @@ export async function openIndex(dbPath: string): Promise<IndexHandle | null> {
   exec(db, "PRAGMA journal_mode = WAL");
   exec(db, "PRAGMA synchronous = NORMAL");
   for (const sql of SCHEMA) exec(db, sql);
+  // v1 fingerprints did not record the session ID. Backfill canonical paths
+  // without rereading sources; unmapped duplicate paths are learned on scan.
+  if (!db.all<{ name: string }>("PRAGMA table_info(sources)").some(col => col.name === "uid")) {
+    exec(db, "ALTER TABLE sources ADD COLUMN uid TEXT");
+    exec(db, `UPDATE sources SET uid = (
+      SELECT s.uid FROM sessions s
+      WHERE s.harness = sources.harness AND s.path = sources.path
+        AND s.mtime_ms = sources.mtime_ms AND s.size = sources.size
+    )`);
+  }
   exec(db, `INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)`, [
     SCHEMA_VERSION,
   ]);
@@ -148,6 +159,28 @@ export function markIndexed(handle: IndexHandle, when: string): void {
   exec(handle.db, "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed_at', ?)", [when]);
 }
 
+/** Cached file-backed metadata, keyed by each source path rather than just UID.
+ * Multiple files may share a native ID. Their fingerprints remain separate,
+ * while the session metadata and search text keep their canonical index row.
+ * These scan-only rows must never be rewritten as fresh session metadata. */
+export function indexedFileSessions(handle: IndexHandle, harness: HarnessId): ExternalSession[] {
+  return handle.db.all<IndexedSessionRow & {
+    source_path: string; source_mtime_ms: number; source_size: number;
+  }>(
+    `select s.*, f.path as source_path, f.mtime_ms as source_mtime_ms, f.size as source_size
+     from sources f join sessions s on s.harness = f.harness and s.uid = f.uid
+     where s.harness = ? and (
+       f.path != s.path or (f.mtime_ms = s.mtime_ms and f.size = s.size)
+     )`,
+    [harness],
+  ).map(row => ({
+    ...rowToSession(row),
+    path: row.source_path,
+    mtimeMs: row.source_mtime_ms,
+    size: row.source_size,
+  }));
+}
+
 /** Source fingerprint per file, so unchanged files can be skipped. */
 export function sourceFingerprint(
   handle: IndexHandle,
@@ -167,10 +200,11 @@ export function setSourceFingerprint(
   path: string,
   mtimeMs: number,
   size: number,
+  uid: string | null = null,
 ): void {
   exec(handle.db,
-    "INSERT OR REPLACE INTO sources (harness, path, mtime_ms, size) VALUES (?, ?, ?, ?)",
-    [harness, path, mtimeMs, size],
+    "INSERT OR REPLACE INTO sources (harness, path, mtime_ms, size, uid) VALUES (?, ?, ?, ?, ?)",
+    [harness, path, mtimeMs, size, uid],
   );
 }
 

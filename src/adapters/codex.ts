@@ -15,7 +15,7 @@ import type {
   ToolUseSummary,
 } from "../types.ts";
 import { emptyFidelity } from "../types.ts";
-import type { NativeResumeAction, SessionAdapter, SessionReadOptions } from "./types.ts";
+import type { ListOptions, NativeResumeAction, SessionAdapter, SessionReadOptions } from "./types.ts";
 import { clip, cleanText, cleanTranscriptText } from "../security.ts";
 import {
   addSearchText,
@@ -28,6 +28,7 @@ import {
   pushCommand,
   pushToolCall,
   pushToolResult,
+  listFileSessions,
   readTextCapped,
   safeStat,
   searchTextFrom,
@@ -73,15 +74,8 @@ export class CodexAdapter implements SessionAdapter {
     return walkFiles(this.root, { exts: [".jsonl"], maxDepth: 5, maxFiles: 20000 });
   }
 
-  async listSessions(opts?: { maxSessions?: number }): Promise<ExternalSession[]> {
-    const limit = opts?.maxSessions ?? 5000;
-    const out: ExternalSession[] = [];
-    for (const file of this.files()) {
-      if (out.length >= limit) break;
-      const parsed = this.parse(file, false);
-      if (parsed) out.push(parsed.session);
-    }
-    return out;
+  async listSessions(opts?: ListOptions): Promise<ExternalSession[]> {
+    return listFileSessions(this.files(), file => this.parse(file, false)?.session ?? null, opts);
   }
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {

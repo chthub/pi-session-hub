@@ -2,8 +2,8 @@
  * Scan orchestration.
  *
  * Walks the enabled adapters and folds their results into the local index.
- * JSONL-backed harnesses are skipped when their file fingerprint is unchanged,
- * so repeat scans are cheap.
+ * File-backed harnesses reuse indexed metadata before reading/parsing unchanged
+ * files. Directory traversal and stat checks still run on every scan.
  */
 
 import type { ExternalSession, HarnessId } from "../types.ts";
@@ -12,6 +12,7 @@ import {
   indexCount,
   markIndexed,
   removeSessions,
+  indexedFileSessions,
   sourceFingerprint,
   setSourceFingerprint,
   transaction,
@@ -34,7 +35,7 @@ export interface ScanResult {
   skipped: number;
   perHarness: Record<string, number>;
   errors: { harness: HarnessId; message: string }[];
-  /** Harnesses whose sessions were fully read this pass. */
+  /** Harnesses successfully listed this pass (including reused metadata). */
   scanned: HarnessId[];
   /** Harnesses that failed. Their indexed sessions are preserved, not deleted. */
   failed: HarnessId[];
@@ -87,8 +88,24 @@ export async function scan(
     });
 
     let sessions: ExternalSession[] = [];
+    const reused = new Set<ExternalSession>();
+    let cachedUids = new Set<string>();
     try {
-      sessions = await adapter.listSessions({ maxSessions: opts.maxPerHarness ?? 2000 });
+      const cached = !opts.force && !DB_BACKED.includes(adapter.id)
+        ? new Map(indexedFileSessions(handle, adapter.id).map(s => [s.path, s]))
+        : null;
+      cachedUids = new Set(cached ? [...cached.values()].map(s => s.uid) : []);
+      sessions = await adapter.listSessions({
+        maxSessions: opts.maxPerHarness ?? 2000,
+        reuseUnchanged: cached ? (path, stat) => {
+          const prev = cached.get(path);
+          if (prev && prev.mtimeMs === stat.mtimeMs && prev.size === stat.size) {
+            reused.add(prev);
+            return prev;
+          }
+          return null;
+        } : undefined,
+      });
       succeeded.add(adapter.id);
     } catch (err) {
       result.errors.push({
@@ -101,9 +118,17 @@ export async function scan(
     }
 
     const toWrite: ExternalSession[] = [];
+    const parsed: ExternalSession[] = [];
     for (const s of sessions) {
       seen.add(s.uid);
-      if (!opts.force && !DB_BACKED.includes(adapter.id)) {
+      if (reused.has(s)) {
+        result.skipped++;
+        continue;
+      }
+      parsed.push(s);
+      // v1 indexes cannot map non-canonical duplicate paths to a session ID.
+      // Learn that mapping after one read, without overwriting canonical text.
+      if (cachedUids.has(s.uid)) {
         const prev = sourceFingerprint(handle, adapter.id, s.path);
         if (prev && prev.mtime_ms === s.mtimeMs && prev.size === s.size) {
           result.skipped++;
@@ -117,8 +142,8 @@ export async function scan(
     // One transaction per adapter: without it, each statement is its own
     // fsync and a full scan takes tens of seconds.
     transaction(handle, () => {
-      for (const s of toWrite) {
-        setSourceFingerprint(handle, adapter.id, s.path, s.mtimeMs, s.size);
+      for (const s of parsed) {
+        setSourceFingerprint(handle, adapter.id, s.path, s.mtimeMs, s.size, s.uid);
       }
       upsertSessions(handle, toWrite);
     });

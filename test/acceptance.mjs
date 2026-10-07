@@ -209,11 +209,11 @@ check(
 const second = await scan(index, registry, { force: false });
 // Deterministic: the file-backed harnesses are skipped on an unchanged rescan,
 // while the database-backed ones are always re-read.
-const fileBacked = counts
-  .filter((c) => ["pi", "claude-code", "codex", "jcode"].includes(c.harness))
-  .reduce((n, c) => n + c.n, 0);
+// Count source files, not unique session IDs: duplicate paths can share an ID.
+const fileBacked = ["pi", "claude-code", "codex", "jcode"]
+  .reduce((n, harness) => n + (first.perHarness[harness] ?? 0), 0);
 check(
-  "incremental rescan skips exactly the unchanged file-backed sessions",
+  "incremental rescan skips exactly the unchanged file-backed sources",
   second.skipped === fileBacked,
   `skipped ${second.skipped}, expected ${fileBacked}`,
 );
