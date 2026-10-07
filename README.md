@@ -3,7 +3,7 @@
 
 # pi-session-hub
 
-**One list for every coding-agent session on your machine. Browse, search and continue in Pi, or read conversations in a standalone local Web Viewer with Markdown, math and a persistent message outline.**
+**One list for coding-agent history: browse and continue inside Pi, read in a standalone Web Viewer, or open history directly in VS Code Remote SSH and resume in native terminals.**
 
 [![npm](https://img.shields.io/npm/v/pi-session-hub?label=npm)](https://www.npmjs.com/package/pi-session-hub)
 [![Pi extension](https://img.shields.io/badge/Pi-extension-19c7d4)](https://github.com/earendil-works/pi-coding-agent)
@@ -12,15 +12,17 @@
 
 </div>
 
-`pi-session-hub` provides a cross-harness terminal browser for Pi and an independent, read-only Web Viewer:
+`pi-session-hub` shares one local core across three hosts: the Pi terminal hub, an independent Web Viewer, and a VS Code workspace extension.
 
 - **See every agent in one list**: Pi, Claude Code, Codex, OpenCode, Crush and JCode sessions, each row labelled with its harness, project, model and recency.
 - **Continue work that started elsewhere**: press `Enter` and the selected session's conversation is loaded into the current chat as a tiered, budgeted context package, so the next thing you type already has it.
-- **Read without spending tokens**: `v` opens the full recovered transcript in a read-only terminal viewer for free. The standalone Web Viewer adds Markdown and `$...$` / `$$...$$` math rendering in your browser.
+- **Read without spending tokens**: `v` opens the recovered transcript in a read-only terminal viewer. Browser and VS Code viewers add Markdown and `$...$` / `$$...$$` math rendering, user-message navigation and grouped tool activity.
 - **Reopen the original tool when you want to**: `n` runs the session's own resume command, with the exact command and its verification basis shown before anything is launched.
-- **Follow your questions**: the Web Viewer's always-visible user-message outline supports search, click-to-jump, previous/next navigation and scroll tracking.
+- **Stay in VS Code**: use the native Session Hub sidebar, open history in editor tabs and choose **▶ 在终端中继续** to resume in an integrated terminal. No HTTP server, browser or port forwarding is needed.
+- **Restore the Pi configuration environment**: user-configured profile directories are matched against saved system Context paths; missing or conflicting evidence prompts for a choice instead of silently inheriting another account.
+- **Follow your questions**: the shared reader's user-message outline supports search, click-to-jump, previous/next navigation and scroll tracking.
 - **Inspect agent activity**: consecutive tool calls/results share one compact foldout with tool names, arguments, commands and source call IDs.
-- **Stay local and read-only**: source stores are never edited, only `~/.pi/agent/pi-session-hub/` is written by the hub, and transcripts are never uploaded to external services. Web access is authenticated loopback HTTP, optionally through a trusted local tunnel.
+- **Stay local and read-only while browsing**: Hub writes only under `~/.pi/agent/pi-session-hub/` and never uploads history. The standalone Web host uses authenticated loopback HTTP; VS Code uses UID-validated `postMessage`. Explicit Resume starts the native agent, which then maintains its own session normally.
 
 ## Package facts
 
@@ -32,6 +34,8 @@
 | Runtime dependencies | `jiti`, `markdown-it`, `katex`; SQLite + FTS5 uses built-in `node:sqlite` |
 | Pi entrypoints | `./extensions/session-hub.ts` |
 | Standalone CLI | `pi-session-hub-web` (`npm run web` from a checkout) |
+| VS Code extension | `vscode-extension/`, version `0.1.0`; VS Code `1.99+`, workspace/Remote SSH host |
+| Pi environment configuration | User-only `~/.pi/agent/pi-session-hub/config.json` |
 | Supported harnesses | 6 |
 | Package image | [assets/session-hub.png](https://raw.githubusercontent.com/Gateton/pi-session-hub/main/assets/session-hub.png) |
 
@@ -48,6 +52,8 @@
 **Pi commands**: `/session-hub`, `/hub`, `/session-search`, `/session-open`, `/session-handoff`, `/session-native`.
 
 **Standalone CLI**: `pi-session-hub-web [--port 43123] [--no-open]`.
+
+**VS Code**: Session Hub Activity Bar tree, editor history viewer, and Open / Resume / Refresh / Copy Session ID commands. Its separate extension manifest lives in `vscode-extension/package.json`; the counts above describe the Pi host.
 
 **Tools**: `session_hub_enable`, `session_hub_search`, `session_hub_context`.
 
@@ -75,8 +81,9 @@ loading for the next model request; no `tool_search` configuration is required.
 | --- | --- | --- |
 | Pi terminal | `alt+r` or `/session-hub` | Search and continue work inside Pi |
 | Standalone Web Viewer | `npm run web` from this checkout | Read Markdown/math, navigate questions and inspect tool calls without sending context to an LLM |
+| VS Code Remote SSH | Install the VSIX from `vscode-extension/` | Read in editor tabs and resume in native VS Code terminals, without HTTP/port forwarding |
 
-The Web Viewer in this fork is available in this checkout. The npm/gallery links
+The additional Web and VS Code viewers in this fork are available in this checkout. The npm/gallery links
 refer to the upstream package; do not assume an upstream npm release includes
 these additions until a corresponding release is published.
 
@@ -132,6 +139,62 @@ pi -e /path/to/pi-session-hub
    ```text
    Where did I work on the language switcher?
    ```
+
+## VS Code Remote SSH
+
+Build the additional workspace extension from this checkout:
+
+```bash
+npm ci --prefix vscode-extension
+npm run package --prefix vscode-extension
+```
+
+1. Connect to the Linux server with VS Code Remote SSH and open your project.
+2. Use **Install from VSIX…** to install `vscode-extension/pi-session-hub-vscode-0.1.0.vsix` on the **remote SSH host**.
+3. Open **Session Hub** in the Activity Bar. The native tree groups current-project, unscoped and other-project history; multi-root workspaces are supported.
+4. Click a session to read it in an editor tab: Markdown, local KaTeX, user-message outline, raw/rendered toggle and grouped tool activity use the shared Web Viewer UI.
+5. Choose **在终端中继续** (Resume), confirm, and continue in a native VS Code terminal running the original Pi/Claude/etc TUI. The source-backed cwd takes precedence; no session-store parent or workspace cwd is guessed.
+6. Refresh the tree when source history changes. Context menus offer Open, Resume and Copy Session ID (namespaced UID).
+
+Session tab labels limit the prompt/title to 20 Unicode characters, using `…` for long titles. The tree and transcript retain the full title, and no editor tab-sizing settings are changed.
+
+No localhost server, browser or port forwarding is used by this host. VS Code
+1.99+ and a workspace extension-host runtime with Node 22.5+ / `node:sqlite`
+are required; agent CLIs must be available in the remote PATH. Untrusted and
+virtual workspaces are not supported. The standalone browser mode and Pi
+`/session-hub` remain available: this is an additional host, not a replacement.
+
+To update an existing same-version VSIX, reinstall it with `--force` from the Remote SSH terminal, then reload the VS Code window:
+
+```bash
+code --install-extension vscode-extension/pi-session-hub-vscode-0.1.0.vsix --force
+```
+
+The Remote SSH workflow has also been manually tested. Automated extension tests
+still mock VS Code APIs; they do not replace live terminal acceptance. See
+[setup, security boundaries and the manual acceptance checklist](vscode-extension/README.md).
+
+## Pi environment configuration
+
+This user-level configuration is shared by the Pi and VS Code hosts:
+`~/.pi/agent/pi-session-hub/config.json`. It contains directory metadata only,
+not credentials or shell commands. For example:
+
+```json
+{
+  "piEnvironments": [
+    { "id": "default", "label": "Pi", "agentDir": "~/.pi/agent" },
+    { "id": "work", "label": "Pi Work", "agentDir": "~/.pi/agent-work" }
+  ]
+}
+```
+
+- IDs and configuration directories must be unique; labels are optional. `agentDir` accepts an absolute path or `~/`.
+- Resume matches saved system Context paths against this list and explicitly sets `PI_CODING_AGENT_DIR`. Models, user messages, tool outputs and shared `sessions` symlinks are not account identity evidence.
+- Missing, conflicting, malformed or truncated evidence prompts for a profile. A missing detected directory or invalid configuration is an error, not a silent switch to another account.
+- No private profile names are built into the extension. Without this file, only the standard Pi directory is offered. Changes reload on the next Resume.
+- Hub never reads `auth.json`, copies tokens or rewrites the original transcript. Restoring a directory does not guarantee that its credentials are still valid or its models are available.
+- This config selects launch environments; it does not expand historical scan locations or execute shell aliases. Keep your actual profile list outside the repository.
 
 ## Standalone Web Viewer
 
@@ -343,14 +406,16 @@ Both are covered by regression tests.
 
 ```
 extensions/session-hub.ts   command, shortcut, tool and renderer wiring
-src/adapters/               one read-only adapter per harness
+src/core/                   shared service: index/registry ownership, UID resolution, refresh
+src/adapters/               one read-only adapter per harness, exact indexed-source reads
 src/index/                  local SQLite + FTS5 index, incremental scan
 src/context.ts              tiered, budgeted transcript context
 src/handoff.ts              deterministic handoff document
-src/native.ts               native resume resolve and launch
+src/native.ts               resume descriptions + legacy Pi detached launcher
 src/security.ts             path guards and secret redaction
 src/tui/                    full-screen hub and transcript viewer
-src/web/                    loopback server, safe Markdown/math and browser UI
+src/web/                    HTTP host, safe Markdown/math, shared UI + transport boundary
+vscode-extension/           remote workspace tree, editor webviews, native terminal launcher
 bin/web.mjs                 independent Web Viewer CLI
 skills/session-hub/         agent-facing skill
 ```
@@ -370,7 +435,9 @@ Verified against the running binary rather than assumed:
 ```bash
 node test/scan.mjs         # isolated incremental-scan regression tests
 node test/smoke.mjs        # exercise every adapter against real stores
-node test/acceptance.mjs   # full requirement suite
+npm test                  # synthetic acceptance + scan/service/workspace/Pi-environment/Pi-host suites
+npm run test:vscode       # extension compile/build + mocked-host/protocol checks
+npm run test:real         # opt-in legacy acceptance against real stores
 npm run test:web          # synthetic-home HTTP, security, math and CLI tests
 npm run test:web:browser  # optional real browser checks; requires Chrome or CHROME_BIN
 ```
@@ -381,12 +448,14 @@ protocol, including a different-port forwarding fixture. Screenshots are optiona
 set `WEB_SCREENSHOT`, `WEB_SCREENSHOT_AGENT` or `WEB_SCREENSHOT_MOBILE` to an output
 path outside the repository. Never commit real-session captures or debug logs.
 
-The original acceptance suite also depends on the developer's real stores,
-specific historical search terms and scan timing, so it is not a portable CI
-pass/fail signal on an arbitrary home. Active sessions can change its store
-fingerprints during a run; use the synthetic Web suite for isolated regression.
+The default acceptance suite now uses isolated synthetic homes, preserving its
+original assertions with deterministic search, long-session and subagent fixtures.
+`npm run test:real` retains the opt-in real-store checks; those still depend on
+historical search terms, harness availability and scan timing, and active sessions
+can change fingerprints during a run. Do not interpret these environmental
+failures as an isolated read-only regression.
 
-The acceptance suite runs against real stores and against a synthetic foreign home, and asserts among other things: index counts equal detected counts, FTS rows equal session rows with no orphans, uids are unique, the context stays inside its budget regardless of session length, the handoff contains every required field, unavailable fields are reported honestly, all six adapters detect, index, search and read a home this project has never seen, and no external store file is modified.
+The acceptance suite runs against synthetic primary and foreign homes, and asserts among other things: index counts equal detected counts, FTS rows equal session rows with no orphans, uids are unique, the context stays inside its budget regardless of session length, the handoff contains every required field, unavailable fields are reported honestly, all six adapters detect, index, search and read a home this project has never seen, and no external store file is modified.
 
 `test/tools/screen.py` reconstructs a screen from a raw ANSI capture, and `test/tools/png.py` renders one to PNG with font fallback. Both exist because stripping escape codes from a full-screen TUI produces a misleading picture.
 
@@ -434,7 +503,7 @@ npm pack && tar xzf pi-session-hub-*.tgz && pi -e ./package
 - **Claude Code and Codex formats are undocumented.** Parsers are defensive and degrade to filename-derived metadata rather than throwing, but a format change may cost fields until the adapter is updated.
 - **Crush does not record a session working directory**, so those sessions show no repo and cannot be filtered by project.
 - **Claude sub-agent transcripts** are indexed (they contain real work) but marked as not resumable and carry their parent session id in the notes.
-- **Recovered transcripts are bounded**: adapter limits vary, and Web calls/results are capped at 8k characters per record. Recovery counts and reading-limit notes are shown; the viewer does not promise an unlimited transcript. Grouping does not remove individual recovered records.
+- **Recovered transcripts are bounded**: files over 64 MiB explicitly carry a `truncated` note because only the head is read and latest messages can be absent; chunk hydration is not implemented yet. Adapter limits vary, and Web calls/results are capped at 8k characters per record. Recovery counts and reading-limit notes are shown; the viewer does not promise an unlimited transcript. Grouping does not remove individual recovered records.
 - **Search covers a bounded excerpt**, not the entire history of a very long session. Phrases from beyond the sampled window will not match.
 - The screenshot above is the real UI captured from a synthetic home directory so that every harness appears at once. It is illustrative data, not anyone's actual sessions.
 
