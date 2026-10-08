@@ -12,7 +12,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const hub = new SessionHubService({ home: os.homedir() });
   service = hub;
   const tree = new SessionTree(hub, () => (vscode.workspace.workspaceFolders ?? [])
-    .filter(folder => folder.uri.scheme === "file" || folder.uri.scheme === "vscode-remote").map(folder => folder.uri.fsPath));
+    .filter(folder => folder.uri.scheme === "file" || folder.uri.scheme === "vscode-remote").map(folder => folder.uri.fsPath), context.extensionUri);
   const view = vscode.window.createTreeView("sessionHub.sessions", { treeDataProvider: tree });
   const launcher = new TerminalLauncher();
   const uidFrom = (value: unknown): string => {

@@ -9,6 +9,7 @@ import { once } from "node:events";
 import { createJiti } from "jiti";
 import { forwardLoopback } from "./fixtures/loopback-forward.mjs";
 const jiti = createJiti(import.meta.url);
+const { renderMarkdown } = await jiti.import("../src/web/markdown.ts");
 const { startWebViewer } = await jiti.import("../src/web/server.ts");
 const { buildWebHome } = await jiti.import("./fixtures/web-home.mjs");
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "session-hub-browser-"));
@@ -224,6 +225,32 @@ try {
   await wait('getComputedStyle(document.querySelector(".resume-button")).backgroundColor === "rgb(128, 212, 199)"');
   check("resume button keeps contrasting green background in dark mode", await evaluate('(() => { const css = getComputedStyle(document.querySelector(".resume-button")); return css.backgroundColor === "rgb(128, 212, 199)" && css.color === "rgb(20, 41, 37)"; })()'));
   await evaluate('document.documentElement.dataset.theme = "light"');
+  // The same shared body renderer used in VS Code must intercept local links,
+  // keep normal URLs untouched, and preserve raw mode and error feedback.
+  const localMessage = { role: "assistant", text: "[阅读页](docs/reading.html) [网站](https://example.com)" };
+  localMessage.html = renderMarkdown(localMessage.text, { localLink: () => "a".repeat(32) });
+  check("browser intercepts local links with bound UID + opaque ID, leaving normal URLs intact",
+    await evaluate(`(async () => {
+      const calls = [];
+      transport.openLink = async (uid, id) => { calls.push({ uid, id }); };
+      const body = renderMessageBody(${JSON.stringify(localMessage)});
+      const link = body.querySelector("[data-session-link]");
+      const followed = link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+      return !followed && calls.length === 1 && calls[0].uid === selected &&
+        calls[0].id === "a".repeat(32) && body.querySelector('a[href="https://example.com"]').target === "_blank";
+    })()`));
+  check("raw transcript mode keeps local links literal", await evaluate(`(() => {
+    raw = true; const body = renderMessageBody(${JSON.stringify(localMessage)}); raw = false;
+    return body.tagName === "PRE" && !body.querySelector("a") && body.textContent.includes("docs/reading.html");
+  })()`));
+  check("local link failures give visible feedback without navigating", await evaluate(`(async () => {
+    transport.openLink = async () => { throw new Error("文件已不存在"); };
+    const body = renderMessageBody(${JSON.stringify(localMessage)});
+    body.querySelector("[data-session-link]").click();
+    await Promise.resolve(); await Promise.resolve();
+    return document.querySelector("#notice").textContent.includes("打开链接失败：文件已不存在");
+  })()`));
   check("viewer makes no remote requests", requests.every(url => url.startsWith(new URL(forward.url).origin)));
   check("no browser JS exceptions", exceptions.length === 0);
   check("no failed resource requests", failures.length === 0);

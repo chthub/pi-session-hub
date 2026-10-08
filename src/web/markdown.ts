@@ -88,23 +88,37 @@ md.renderer.rules.hub_math = (tokens, index) => {
   }
 };
 
+export interface MarkdownRenderOptions {
+  /** Host-issued opaque ID; never a client-supplied filesystem path. */
+  localLink?: (href: string) => string | undefined;
+}
+
 // Never fetch images from a transcript (tracking URLs and local network probes).
 md.renderer.rules.image = (tokens, index) =>
   `<span class="image-placeholder">[图片：${md.utils.escapeHtml(tokens[index].content)}]</span>`;
 
-md.renderer.rules.link_open = (tokens, index, options, _env, renderer) => {
+md.renderer.rules.link_open = (tokens, index, options, env: MarkdownRenderOptions, renderer) => {
   const token = tokens[index];
   const href = token.attrGet("href") ?? "";
   if (!/^(https?:|mailto:)/i.test(href)) {
     token.attrs = (token.attrs ?? []).filter(([name]) => name !== "href");
+    // HTTP readers keep local links disabled. VS Code can opt in through its
+    // bound-session registry, without allowing command/file/javascript URLs.
+    if (href && !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(href)) {
+      const id = env.localLink?.(href);
+      if (id) {
+        token.attrSet("href", "#");
+        token.attrSet("data-session-link", id);
+      }
+    }
   }
   token.attrSet("target", "_blank");
   token.attrSet("rel", "noopener noreferrer");
   return renderer.renderToken(tokens, index, options);
 };
 
-export function renderMarkdown(text: string): string {
-  return md.render(redact(text));
+export function renderMarkdown(text: string, options: MarkdownRenderOptions = {}): string {
+  return md.render(redact(text), options);
 }
 
 export function renderPlainText(text: string): string {

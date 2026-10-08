@@ -30,6 +30,10 @@ npm run package --prefix vscode-extension
 code --install-extension vscode-extension/pi-session-hub-vscode-0.1.0.vsix --force
 ```
 
+会话树每条记录使用与 TUI 一致的 harness 图标（Pi π、Claude ✻、Codex ⬡、OpenCode ⌘、Crush ❯、JCode ◆），由本地 SVG 提供明暗两套颜色，不依赖终端字体。
+
+正文保留 HTTP/mailto 超链接。项目内相对文件链接按**来源会话的 cwd** 解析，点击交给 VS Code 打开对应文件（HTML 默认打开源文件，安装预览扩展后可预览）；Remote SSH 时打开远程文件，不在本机拼路径。不启动网页服务。缺少 cwd、越出项目目录、凭据文件或危险协议的链接不启用；文件消失会明确报错。独立 HTTP 阅读器仍禁用本地文件链接。
+
 Session 标签中的标题最多显示 20 个字符，过长显示 `…`，不会拆开 emoji。完整标题仍保留在会话树和正文中；扩展不修改 VS Code 的编辑器标签宽度设置。
 
 ## Pi 环境配置
@@ -58,7 +62,7 @@ Session 标签中的标题最多显示 20 个字符，过长显示 `…`，不�
 
 - 读取远程用户的 `~/.pi`、`~/.claude` 等源记录，只写 `~/.pi/agent/pi-session-hub/` 索引。扩展浏览记录不修改源文件。
 - Resume 是明确确认后的独立动作，原生 agent 随后会自行维护会话；其行为不属于历史查看器的只读保证。
-- Webview 通过经过校验的 UID 消息与扩展通信，不能提供任意文件路径、命令或 argv。每个页面只访问绑定的会话。
+- Webview 通过经过校验的 UID 消息与扩展通信，不能提供任意文件路径、命令或 argv。每个页面只访问绑定的会话；打开本地链接只能提交正文渲染时由宿主签发的 ID，宿主在点击时检查项目边界、符号链接和受保护路径。
 - CSP 禁止 Webview 网络连接及图片加载，脚本、KaTeX 样式和字体全部打包在本地；Markdown 禁止原始 HTML，并尽力脱敏。
 - 在不可信工作区和虚拟工作区中不启用扩展。
 - 继续命令使用来源记录的 cwd；不猜测当前工作区或 session-store 父目录。未记录 cwd 时使用终端默认目录，并在确认框中提示；记录的目录已消失则报错，不静默换目录。

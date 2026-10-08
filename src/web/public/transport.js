@@ -54,16 +54,17 @@
         this.pending.clear();
       });
     }
-    request(operation, uid) {
+    request(operation, uid, linkId) {
       const id = ++this.sequence;
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => { this.pending.delete(id); reject(new Error("扩展响应超时，请重新打开会话")); }, 120000);
         this.pending.set(id, { resolve, reject, timeout });
-        this.vscode.postMessage({ type: "sessionHub.request", id, operation, ...(uid ? { uid } : {}) });
+        this.vscode.postMessage({ type: "sessionHub.request", id, operation, ...(uid ? { uid } : {}), ...(linkId ? { linkId } : {}) });
       });
     }
     status() { return this.request("status"); }
     getSession(uid) { return this.request("getSession", uid); }
+    openLink(uid, linkId) { return this.request("openLink", uid, linkId); }
     refresh() { return this.request("refresh"); }
   }
   window.sessionHubTransport = document.body.dataset.host === "vscode" ? new VscodeTransport() : new HttpTransport();

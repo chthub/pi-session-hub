@@ -6,6 +6,7 @@ import { sanitize, viewerDetail } from "../../src/web/presentation.ts";
 import { redact } from "../../src/security.ts";
 import { parseViewerRequest, type ViewerResponse } from "./protocol.ts";
 import { sessionTabTitle } from "./sessionTitle.ts";
+import { SessionLinks } from "./sessionLinks.ts";
 
 function escapeAttribute(value: string): string {
   return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
@@ -39,6 +40,7 @@ export class SessionViewer implements vscode.Disposable {
       vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [media] });
     this.panels.set(uid, panel);
     const disposables: vscode.Disposable[] = [];
+    let links = new SessionLinks(null);
     disposables.push(panel.webview.onDidReceiveMessage(async (value: unknown) => {
       const id = value && typeof value === "object" ? (value as { id?: unknown }).id : undefined;
       if (!Number.isSafeInteger(id) || Number(id) < 1) return;
@@ -54,7 +56,15 @@ export class SessionViewer implements vscode.Disposable {
           case "getSession": {
             const detail = await this.service.getSession(uid, { preserveFormatting: true, includeToolActivity: true });
             if (!detail) throw new Error("源会话已消失或无法读取");
-            response.result = viewerDetail(detail);
+            const nextLinks = new SessionLinks(detail.cwd);
+            response.result = viewerDetail(detail, { localLink: href => nextLinks.register(href) });
+            links = nextLinks;
+            break;
+          }
+          case "openLink": {
+            const target = links.resolve(request.linkId!);
+            await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(target.path).with({ fragment: target.fragment }));
+            response.result = { ok: true };
             break;
           }
           case "refresh": response.result = await this.refresh(); break;

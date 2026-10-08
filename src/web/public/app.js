@@ -201,6 +201,13 @@ function renderMessageBody(message) {
     // Only server-rendered, HTML-disabled Markdown + untrusted-mode KaTeX.
     // Transcript strings, outline previews and metadata use textContent.
     body.innerHTML = message.html;
+    for (const link of body.querySelectorAll("a[data-session-link]")) {
+      link.addEventListener("click", async event => {
+        event.preventDefault();
+        try { await transport.openLink(selected, link.dataset.sessionLink); }
+        catch (error) { notice(`打开链接失败：${error.message}`, true); }
+      });
+    }
     for (const table of body.querySelectorAll("table")) {
       const scroll = element("div", undefined, "table-scroll");
       table.replaceWith(scroll);

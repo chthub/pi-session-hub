@@ -5,14 +5,17 @@ import { redact } from "../../src/security.ts";
 import { sessionProjectScope, type ProjectScope } from "./projectScope.ts";
 
 export class SessionTreeItem extends vscode.TreeItem {
-  constructor(readonly session: ExternalSession) {
+  constructor(readonly session: ExternalSession, extensionUri: vscode.Uri) {
     super(redact(session.title || session.preview || session.nativeId), vscode.TreeItemCollapsibleState.None);
     this.id = session.uid;
     this.contextValue = "session";
     this.description = `${HARNESS_LABEL[session.harness]} · ${recency(session.updatedAt ?? session.createdAt)}`;
     this.tooltip = redact([HARNESS_LABEL[session.harness], session.model, session.repo || session.cwd,
       session.nativeId, `${session.messageCount} 条消息`].filter(Boolean).join("\n"));
-    this.iconPath = new vscode.ThemeIcon("comment-discussion");
+    this.iconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "media", "harness", "light", `${session.harness}.svg`),
+      dark: vscode.Uri.joinPath(extensionUri, "media", "harness", "dark", `${session.harness}.svg`),
+    };
     this.command = { command: "sessionHub.open", title: "打开会话", arguments: [session.uid] };
   }
 }
@@ -38,7 +41,8 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.Dispos
   private readonly change = new vscode.EventEmitter<Node | undefined>();
   readonly onDidChangeTreeData = this.change.event;
   private sessions: ExternalSession[] = [];
-  constructor(private readonly service: SessionHubService, private readonly roots: () => string[]) {}
+  constructor(private readonly service: SessionHubService, private readonly roots: () => string[],
+    private readonly extensionUri: vscode.Uri) {}
 
   async reload(): Promise<void> {
     // Scope AFTER pagination, so an old current-project session isn't hidden
@@ -58,7 +62,7 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.Dispos
     const roots = this.roots();
     const groups: [ProjectScope, string][] = [["current", "当前项目"], ["unscoped", "项目未识别"], ["other", "其他项目"]];
     if (node instanceof SessionTreeItem) return [];
-    if (node) return this.sessions.filter(session => sessionProjectScope(session, roots) === node.scope).map(session => new SessionTreeItem(session));
+    if (node) return this.sessions.filter(session => sessionProjectScope(session, roots) === node.scope).map(session => new SessionTreeItem(session, this.extensionUri));
     return groups.map(([scope, label]) => new GroupItem(scope, label,
       this.sessions.filter(session => sessionProjectScope(session, roots) === scope).length));
   }

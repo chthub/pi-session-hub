@@ -10,6 +10,8 @@ import { buildToolHome } from "./fixtures/tool-home.mjs";
 const root = fileURLToPath(new URL("../vscode-extension/", import.meta.url));
 const jiti = createJiti(import.meta.url);
 const { parseViewerRequest } = await jiti.import("../vscode-extension/src/protocol.ts");
+const { SessionLinks } = await jiti.import("../vscode-extension/src/sessionLinks.ts");
+const { renderMarkdown } = await jiti.import("../src/web/markdown.ts");
 const { sessionTabTitle } = await jiti.import("../vscode-extension/src/sessionTitle.ts");
 assert.equal(sessionTabTitle("short", "id"), "Session: short");
 assert.equal(sessionTabTitle("a".repeat(20), "id"), "Session: " + "a".repeat(20));
@@ -33,6 +35,9 @@ for (const request of [
   { type: "sessionHub.request", id: 1, operation: "delete", uid: "pi:allowed" },
   { type: "sessionHub.request", id: 1, operation: "status", uid: "pi:allowed" },
   { type: "sessionHub.request", id: "1", operation: "status" },
+  { type: "sessionHub.request", id: 1, operation: "openLink", uid: "pi:allowed", linkId: "/etc/passwd" },
+  { type: "sessionHub.request", id: 1, operation: "openLink", uid: "pi:elsewhere", linkId: "a".repeat(32) },
+  { type: "sessionHub.request", id: 1, operation: "status", linkId: "a".repeat(32) },
 ]) assert.throws(() => parseViewerRequest(request, "pi:allowed"));
 check("typed protocol rejects paths, argv, destructive actions and other UIDs", true);
 
@@ -49,6 +54,46 @@ for (const file of files(home).filter(file => /\.jsonl?$/.test(file))) {
 }
 const longPrompt = "用户提出的长问题与任务背景".repeat(8);
 const piSource = files(path.join(home, ".pi", "agent", "sessions")).find(file => file.endsWith(".jsonl"));
+// Synthetic report path and prose: never embed real project/session content.
+const readingHref = "docs/reports/example/reading.html";
+const readingFile = path.join(project, readingHref);
+fs.mkdirSync(path.dirname(readingFile), { recursive: true });
+fs.writeFileSync(readingFile, "<html><body>阅读页</body></html>");
+const linkedText = "以下为虚构的诊断示例。\n\n[阅读页：诊断结果与解释说明](" + readingHref + ")\n\n[网站](https://example.com/report)";
+fs.appendFileSync(piSource, JSON.stringify({ type: "message", message: { role: "assistant", content: linkedText } }) + "\n");
+const localLinks = new SessionLinks(project);
+check("session-relative links and fragments resolve from source cwd, including spaces",
+  localLinks.resolve(localLinks.register(readingHref + "#结果")).path === fs.realpathSync(readingFile) &&
+  localLinks.resolve(localLinks.register(readingHref + "#结果")).fragment === "结果");
+for (const href of ["../outside.html", "%2e%2e/outside.html", "/etc/passwd", "//evil.example/page",
+  "command:workbench.action.terminal.new", "file:///etc/passwd", "https://example.com", ".env", "auth.json", "docs/%00bad", "docs/%2fbad"]) {
+  assert.equal(localLinks.register(href), undefined, href);
+}
+check("local link registry rejects traversal, arbitrary schemes and credential paths", true);
+check("cwd is required; workspace and history directory are never guessed",
+  new SessionLinks(null).register(readingHref) === undefined && new SessionLinks("relative").register(readingHref) === undefined);
+const outsideFile = path.join(temp, "outside.html");
+fs.writeFileSync(outsideFile, "outside");
+const symlink = path.join(project, "linked.html");
+fs.symlinkSync(readingFile, symlink);
+const symlinkId = localLinks.register("linked.html");
+assert.equal(localLinks.resolve(symlinkId).path, fs.realpathSync(readingFile));
+fs.unlinkSync(symlink); fs.symlinkSync(outsideFile, symlink);
+assert.throws(() => localLinks.resolve(symlinkId), /项目内/);
+const credential = path.join(project, "auth.json");
+fs.writeFileSync(credential, "{}");
+fs.unlinkSync(symlink); fs.symlinkSync(credential, symlink);
+assert.throws(() => localLinks.resolve(symlinkId), /受保护/);
+assert.throws(() => localLinks.resolve("a".repeat(32)), /不属于/);
+assert.throws(() => localLinks.resolve(localLinks.register("missing.html")), /不存在/);
+check("click revalidates missing files, forged IDs and changed/credential symlinks", true);
+const renderOptions = { localLink: href => localLinks.register(href) };
+check("host opt-in preserves local link label and issues an opaque ID",
+  renderMarkdown(linkedText, renderOptions).includes("data-session-link=") && renderMarkdown(linkedText, renderOptions).includes("阅读页：诊断结果"));
+check("per-render host options never leak local links to HTTP rendering",
+  !renderMarkdown(linkedText).includes("data-session-link=") && !renderMarkdown(linkedText).includes('href="docs/'));
+check("command and network-path links remain disabled even when host opts in",
+  !renderMarkdown("[x](command:evil) [y](//evil.example)", renderOptions).includes("data-session-link="));
 const profiles = [
   { id: "default", label: "Pi", agentDir: path.join(home, ".pi", "agent") },
   { id: "research", label: "Pi Research", agentDir: path.join(home, "profiles", "research with spaces") },
@@ -80,17 +125,20 @@ class EventEmitter {
 class Uri {
   constructor(fsPath) { this.fsPath = fsPath; this.scheme = "file"; }
   static joinPath(uri, ...parts) { return new Uri(path.join(uri.fsPath, ...parts)); }
+  static file(fsPath) { return new Uri(fsPath); }
+  with(changes) { return Object.assign(new Uri(this.fsPath), changes); }
   toString() { return `file://${this.fsPath}`; }
 }
 class TreeItem { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState; } }
 const commands = new Map(), panels = [], terminals = [], errors = [], settingUpdates = [], environmentPicks = [], confirmations = [];
+const openedFiles = [];
 let clipboard, tree, view, workspaceChanged, confirmation = "在终端中继续", pickedProfile = "default", extension;
 const vscode = {
   Disposable, EventEmitter, Uri, TreeItem, ThemeIcon: class { constructor(id) { this.id = id; } },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, ViewColumn: { Active: -1 },
   workspace: { workspaceFolders: [{ uri: new Uri(project) }], onDidChangeWorkspaceFolders(callback) { workspaceChanged = callback; return new Disposable(); },
     getConfiguration(section) { assert.equal(section, "workbench.editor"); return { async update(key, value, target) { settingUpdates.push({ key, value, target }); } }; } },
-  commands: { registerCommand(name, callback) { commands.set(name, callback); return new Disposable(() => commands.delete(name)); } },
+  commands: { async executeCommand(name, uri) { assert.equal(name, "vscode.open"); openedFiles.push(uri); }, registerCommand(name, callback) { commands.set(name, callback); return new Disposable(() => commands.delete(name)); } },
   env: { clipboard: { async writeText(value) { clipboard = value; } } },
   window: {
     createTreeView(_id, options) { tree = options.treeDataProvider; view = new Disposable(); return view; },
@@ -137,6 +185,12 @@ try {
   const currentItems = tree.getChildren(current);
   check("tree scopes current project and labels sessions with harness + recency", currentItems.length >= 4 && currentItems.every(item => item.description.includes(" · ")));
   check("unscoped sessions remain visible", tree.getChildren(groups.find(group => group.scope === "unscoped")).some(item => item.session.harness === "crush"));
+  const allItems = groups.flatMap(group => tree.getChildren(group));
+  check("all six harnesses have their own light/dark SVG tree icons",
+    new Set(allItems.map(item => item.session.harness)).size === 6 &&
+    allItems.every(item => ["light", "dark"].every(theme =>
+      item.iconPath[theme].fsPath === path.join(root, "media/harness", theme, item.session.harness + ".svg") &&
+      fs.readFileSync(item.iconPath[theme].fsPath, "utf8").includes("<svg"))));
   const pi = currentItems.find(item => item.session.harness === "pi" && item.session.nativeId === "11111111-2222-3333-4444-555555555555");
   const claude = currentItems.find(item => item.session.harness === "claude-code");
   await commands.get("sessionHub.open")(pi);
@@ -151,6 +205,18 @@ try {
   const detail = response.result;
   check("transcript metadata keeps the full title after tab truncation", detail.title === longPrompt);
   check("postMessage detail keeps Markdown/math/tool activity and redaction", !response.error && detail.messages.some(m => m.html.includes('class="katex"')) && detail.messages.some(m => m.role === "toolCall") && !JSON.stringify(detail).includes("TOOL_SECRET_VALUE"));
+  const linkedMessage = detail.messages.find(message => message.text.includes("阅读页：诊断结果"));
+  const linkId = linkedMessage.html.match(/data-session-link="([a-f0-9]{32})"/)?.[1];
+  check("compiled webview keeps the reported reading-page link and external URLs",
+    linkId && linkedMessage.html.includes('href="https://example.com/report"'));
+  const linkResponse = await request("openLink", { uid: pi.session.uid, linkId });
+  check("local link click opens the source-cwd file through VS Code (no browser/server)",
+    !linkResponse.error && openedFiles.at(-1).fsPath === fs.realpathSync(readingFile));
+  check("client cannot forge paths or link IDs",
+    Boolean((await request("openLink", { uid: pi.session.uid, linkId: "a".repeat(32) })).error) &&
+    Boolean((await request("openLink", { uid: pi.session.uid, linkId, path: outsideFile })).error));
+  await request("getSession", { uid: pi.session.uid });
+  check("reload invalidates stale panel link IDs", Boolean((await request("openLink", { uid: pi.session.uid, linkId })).error));
   check("webview cannot supply a filesystem path", Boolean((await request("getSession", { uid: pi.session.uid, path: "/etc/passwd" })).error));
   check("webview cannot read a different session", Boolean((await request("getSession", { uid: claude.session.uid })).error));
   await request("copyId", { uid: pi.session.uid });
@@ -219,6 +285,11 @@ check("transport matches replies and clears request timers", (await pending).uid
 const error = transport.status();
 listeners.message({ data: { type: "sessionHub.response", id: sent[1].id, error: "denied" } });
 await assert.rejects(() => error, /denied/);
+const linkPending = transport.openLink("pi:bound", "a".repeat(32));
+check("local link transport sends only bound UID and opaque link ID",
+  sent.at(-1).operation === "openLink" && sent.at(-1).linkId === "a".repeat(32) && sent.at(-1).path === undefined);
+listeners.message({ data: { type: "sessionHub.response", id: sent.at(-1).id, result: { ok: true } } });
+await linkPending;
 const timeout = transport.refresh();
 [...timers.values()][0]();
 await assert.rejects(() => timeout, /超时/);

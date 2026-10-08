@@ -1,6 +1,6 @@
 import { redact } from "../security.ts";
 import type { ExternalSession, SessionDetail } from "../types.ts";
-import { renderMarkdown, renderPlainText } from "./markdown.ts";
+import { renderMarkdown, renderPlainText, type MarkdownRenderOptions } from "./markdown.ts";
 
 /** Shared redacted wire model for HTTP and VS Code hosts. */
 export function sanitize<T>(value: T): T {
@@ -11,8 +11,8 @@ export function sessionSummary(session: ExternalSession) {
     repo: session.repo ?? session.cwd, model: session.model, updatedAt: session.updatedAt ?? session.createdAt,
     messageCount: session.messageCount });
 }
-export function viewerDetail(detail: SessionDetail) {
+export function viewerDetail(detail: SessionDetail, options: MarkdownRenderOptions = {}) {
   const { searchText: _searchText, ...metadata } = detail;
   return sanitize({ ...metadata, messages: detail.messages.map(message => ({ ...message,
-    html: /tool|function/i.test(message.role) ? renderPlainText(message.text) : renderMarkdown(message.text) })) });
+    html: /tool|function/i.test(message.role) ? renderPlainText(message.text) : renderMarkdown(message.text, options) })) });
 }
