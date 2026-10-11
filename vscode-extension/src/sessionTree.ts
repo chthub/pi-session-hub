@@ -81,12 +81,20 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
     return { color: new vscode.ThemeColor("sessionHub.starredForeground"), tooltip: "已加星标", propagate: false };
   }
   hasSession(uid: string): boolean { return this.sessions.some(session => session.uid === uid); }
+  /** Stable partition of the index's newest-first order. Never mutate the cache:
+   * unstar restores chronological placement, and no source timestamps change. */
+  private orderedSessions(): ExternalSession[] {
+    const starred: ExternalSession[] = [], ordinary: ExternalSession[] = [];
+    for (const session of this.sessions) (this.stars.has(session.uid) ? starred : ordinary).push(session);
+    return starred.concat(ordinary);
+  }
   /** Bounded, source-path-free rows for the two-line sidebar. Pagination is only
    * presentation: the underlying index and project grouping remain complete. */
   sidebarGroups(limits: Record<ProjectScope, number>) {
     const roots = this.roots();
     const buckets: Record<ProjectScope, ExternalSession[]> = { current: [], unscoped: [], other: [] };
-    for (const session of this.sessions) buckets[sessionProjectScope(session, roots)].push(session);
+    // Pin before slicing pages so even old stars appear on the first page.
+    for (const session of this.orderedSessions()) buckets[sessionProjectScope(session, roots)].push(session);
     return ([["current", "当前项目"], ["unscoped", "项目未识别"], ["other", "其他项目"]] as const).map(([scope, label]) => ({
       scope, label, total: buckets[scope].length,
       sessions: buckets[scope].slice(0, limits[scope]).map(session => ({
@@ -102,7 +110,7 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
     const roots = this.roots();
     const groups: [ProjectScope, string][] = [["current", "当前项目"], ["unscoped", "项目未识别"], ["other", "其他项目"]];
     if (node instanceof SessionTreeItem) return [];
-    if (node) return this.sessions.filter(session => sessionProjectScope(session, roots) === node.scope).map(session => new SessionTreeItem(session, this.extensionUri, this.stars.has(session.uid)));
+    if (node) return this.orderedSessions().filter(session => sessionProjectScope(session, roots) === node.scope).map(session => new SessionTreeItem(session, this.extensionUri, this.stars.has(session.uid)));
     return groups.map(([scope, label]) => new GroupItem(scope, label,
       this.sessions.filter(session => sessionProjectScope(session, roots) === scope).length));
   }

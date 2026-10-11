@@ -67,7 +67,7 @@ try {
     const rows = Array.from({length:205}, (_, i) => ({uid:'pi:row-'+i, title:i === 0 ? '修复会话索引与大文件读取 <img src=x onerror="window.injected=true"> 中文标题与超长标识符_identifier_'.repeat(4) : '第'+i+'条会话：检查实现并解释结果', harness:'pi', harnessLabel:'Pi', recency:'3 分钟前', starred:false, icons:{light:${JSON.stringify(origin + "/harness/light/pi.svg")},dark:${JSON.stringify(origin + "/harness/dark/pi.svg")}}}));
     let limit = 100;
     const send = data => window.dispatchEvent(new MessageEvent('message',{data}));
-    function publish() { send({type:'sessionHub.sidebar.state',status:'',groups:[{scope:'current',label:'当前项目',total:205,sessions:rows.slice(0,limit)},{scope:'unscoped',label:'项目未识别',total:0,sessions:[]},{scope:'other',label:'其他项目',total:0,sessions:[]}]}); }
+    function publish() { const ordered=rows.filter(row=>row.starred).concat(rows.filter(row=>!row.starred)); send({type:'sessionHub.sidebar.state',status:'',groups:[{scope:'current',label:'当前项目',total:205,sessions:ordered.slice(0,limit)},{scope:'unscoped',label:'项目未识别',total:0,sessions:[]},{scope:'other',label:'其他项目',total:0,sessions:[]}]}); }
     window.acquireVsCodeApi = () => ({getState:()=>window.savedState,setState:value=>{window.savedState=structuredClone(value);},postMessage:request=>{
       window.requests.push(request);
       setTimeout(()=>{
@@ -147,6 +147,10 @@ try {
   await evaluate(`document.querySelector('[data-uid="pi:row-50"]').scrollIntoView(); window.scrollBeforeStar=scrollY;document.querySelector('[data-uid="pi:row-50"] .star-button').click()`);
   await wait(`document.querySelector('[data-uid="pi:row-50"]').classList.contains('is-starred') && !document.querySelector('[data-uid="pi:row-50"] .star-button').disabled`);
   check("star updates preserve scroll position in a long list", await evaluate(`Math.abs(scrollY-window.scrollBeforeStar)<2`));
+  check("confirmed starred card moves to the top without opening its conversation", await evaluate(`document.querySelector(".session-card").dataset.uid==="pi:row-50" && !window.requests.some(r=>r.action==="open"&&r.uid==="pi:row-50")`));
+  await evaluate(`document.querySelector(".star-button").click()`);
+  await wait(`!document.querySelector('[data-uid="pi:row-50"]').classList.contains("is-starred") && !document.querySelector('[data-uid="pi:row-50"] .star-button').disabled`);
+  check("unstar on the moved button still targets its UID and restores original order", await evaluate(`document.querySelector(".session-card").dataset.uid==="pi:row-0" && Array.from(document.querySelectorAll(".session-card"))[50].dataset.uid==="pi:row-50" && window.requests.at(-1).uid==="pi:row-50"`));
   await evaluate(`document.querySelector('.more').click()`);
   await wait(`document.querySelectorAll('.session-card').length===200`);
   await evaluate(`document.querySelector('.more').click()`);

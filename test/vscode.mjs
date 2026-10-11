@@ -360,10 +360,43 @@ try {
   try {
     vscode.workspace.workspaceFolders = [{ uri: new Uri(project) }];
     // Pagination-only fixture: no source parsing or index modifications needed.
-    tree.sessions = Array.from({ length: 205 }, (_, i) => ({ ...pi.session, uid: `pi:page-${i}`, repo: project, cwd: project }));
+    tree.sessions = Array.from({ length: 205 }, (_, i) => ({ ...pi.session, uid: `pi:page-${i}`, repo: project, cwd: project,
+      updatedAt: new Date(Date.UTC(2026, 0, 1) - i * 60000).toISOString() }));
+    tree.sessions.push(
+      { ...pi.session, uid: "pi:other-new", repo: path.join(temp, "other"), cwd: path.join(temp, "other") },
+      { ...pi.session, uid: "pi:other-old", repo: path.join(temp, "other"), cwd: path.join(temp, "other") },
+      { ...pi.session, uid: "pi:unscoped-new", repo: null, cwd: null },
+      { ...pi.session, uid: "pi:unscoped-old", repo: null, cwd: null });
     tree.rescope();
     let group = sidebarState().groups.find(g => g.scope === "current");
+    const currentRows = () => sidebarState().groups.find(g => g.scope === "current").sessions.map(row => row.uid);
+    const originalOrder = tree.sessions.map(session => session.uid);
     assert.equal(group.total, 205); assert.equal(group.sessions.length, 100);
+    await sidebarRequest("star", { uid: "pi:page-204", starred: true });
+    assert.deepEqual(currentRows(), ["pi:page-204", ...originalOrder.slice(0, 99)]);
+    assert.equal(tree.getChildren(tree.getChildren().find(g => g.scope === "current"))[0].id, "pi:page-204");
+    check("old starred sessions move to the first page before pagination", true);
+    await sidebarRequest("star", { uid: "pi:page-203", starred: true });
+    assert.deepEqual(currentRows().slice(0, 3), ["pi:page-203", "pi:page-204", "pi:page-0"]);
+    assert.deepEqual(tree.sessions.map(session => session.uid), originalOrder);
+    check("multiple stars preserve newest-first order without mutating the source-order cache", true);
+    const pinnedOrder = currentRows();
+    failStateWrite = true;
+    assert.ok((await sidebarRequest("star", { uid: "pi:page-202", starred: true })).error);
+    assert.ok((await sidebarRequest("star", { uid: "pi:page-203", starred: false })).error);
+    assert.deepEqual(currentRows(), pinnedOrder);
+    failStateWrite = false;
+    check("failed star/unstar writes do not reorder visible cards", true);
+    await sidebarRequest("star", { uid: "pi:other-old", starred: true });
+    await sidebarRequest("star", { uid: "pi:unscoped-old", starred: true });
+    assert.deepEqual(currentRows(), pinnedOrder);
+    assert.deepEqual(sidebarState().groups.find(g => g.scope === "other").sessions.map(row => row.uid), ["pi:other-old", "pi:other-new"]);
+    assert.deepEqual(sidebarState().groups.find(g => g.scope === "unscoped").sessions.map(row => row.uid), ["pi:unscoped-old", "pi:unscoped-new"]);
+    check("stars pin within their own project groups without moving unrelated sessions", true);
+    for (const uid of ["pi:page-203", "pi:page-204", "pi:other-old", "pi:unscoped-old"]) await sidebarRequest("star", { uid, starred: false });
+    assert.deepEqual(currentRows(), originalOrder.slice(0, 100));
+    unchanged(beforeSidebarActions);
+    check("unstar restores chronological placement and all pinning leaves source/index bytes unchanged", true);
     await sidebarRequest("more", { scope: "current" });
     assert.equal(sidebarState().groups.find(g => g.scope === "current").sessions.length, 200);
     await sidebarRequest("more", { scope: "current" });
@@ -440,14 +473,34 @@ try {
   check("star/unstar including failures and rapid clicks leave ALL source and index files byte-for-byte unchanged", true);
   await commands.get("sessionHub.refresh")();
   check("stars survive refresh and reconstructed tree items", item(pi.session.uid).contextValue === "sessionStarred" && item(claude.session.uid).contextValue === "sessionStarred");
+  const assertPinnedGroups = () => {
+    const stars = new Set(JSON.parse(fs.readFileSync(stateFile, "utf8"))["sessionHub.starredSessionUids.v1"] ?? []);
+    const originalRanks = new Map(tree.sessions.map((row, i) => [row.uid, i]));
+    for (const group of sidebarState().groups) {
+      let sawOrdinary = false, lastStar = -1, lastOrdinary = -1;
+      for (const row of group.sessions) {
+        const rank = originalRanks.get(row.uid);
+        assert.equal(row.starred, stars.has(row.uid));
+        if (row.starred) { assert.equal(sawOrdinary, false); assert.ok(rank > lastStar); lastStar = rank; }
+        else { sawOrdinary = true; assert.ok(rank > lastOrdinary); lastOrdinary = rank; }
+      }
+    }
+  };
+  assertPinnedGroups();
+  check("refresh preserves pinned stars and stable chronological order within each section", true);
   vscode.workspace.workspaceFolders = [{ uri: new Uri(project) }];
   workspaceChanged();
   check("stars survive workspace regrouping", tree.getChildren(tree.getChildren().find(group => group.scope === "current")).some(row => row.id === pi.session.uid && row.contextValue === "sessionStarred"));
+  assertPinnedGroups();
+  check("workspace changes preserve pinning in the new project groups", true);
   disposeExtension();
   vscode.workspace.workspaceFolders = [{ uri: new Uri(path.join(temp, "restarted-workspace")) }];
   context = makeContext();
   await extension.activate(context);
   check("globalState stars survive extension restart in a different workspace", item(pi.session.uid).contextValue === "sessionStarred" && item(claude.session.uid).contextValue === "sessionStarred");
+  sidebar = mountSidebar(); await sidebarRequest("ready");
+  assertPinnedGroups();
+  check("existing saved stars are pinned on the first render after extension restart", true);
   check("saved stars regain their theme color after refresh/workspace changes/restart",
     tree.provideFileDecoration(item(pi.session.uid).resourceUri)?.color.id === "sessionHub.starredForeground" &&
     tree.provideFileDecoration(item(claude.session.uid).resourceUri)?.color.id === "sessionHub.starredForeground");
