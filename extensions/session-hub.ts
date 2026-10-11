@@ -96,7 +96,7 @@ export default function sessionHub(pi: ExtensionAPI) {
       const result = await ctx.ui.custom<{ errors: string[] }>((tui, theme, _kb, done) => {
         const loader = new BorderedLoader(tui, theme, force ? "Reindexing all harnesses…" : "Indexing harness sessions…");
         loader.onAbort = () => done({ errors: [] });
-        service.refresh({ force, maxPerHarness: 2000 })
+        service.refresh({ force })
           .then(r => done({ errors: r.errors.map(e => `${e.harness}: ${e.message}`) }))
           .catch(error => done({ errors: [error instanceof Error ? error.message : String(error)] }));
         return loader;
@@ -105,7 +105,7 @@ export default function sessionHub(pi: ExtensionAPI) {
       status = await service.getStatus();
     }
     detections = status.detections;
-    sessions = await service.listSessions({ limit: 2000 });
+    sessions = await service.listSessions({ limit: -1 });
   }
 
   /**

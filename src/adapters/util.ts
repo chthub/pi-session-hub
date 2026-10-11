@@ -67,30 +67,59 @@ export interface WalkOptions {
   exts?: string[];
   maxDepth?: number;
   maxFiles?: number;
+  /** False for formats whose transcript namespace is root-only (JCode). */
+  recursive?: boolean;
+  onIncomplete?: (reason: string) => void;
 }
 
-/** Recursive file listing that tolerates unreadable subdirectories. */
+/** Uncapped traversal. Read gaps are reported, never disguised as deletion. */
 export function walkFiles(root: string, opts: WalkOptions = {}): string[] {
   const exts = opts.exts ?? [".jsonl"];
-  const maxDepth = opts.maxDepth ?? 6;
-  const maxFiles = opts.maxFiles ?? 20000;
+  const maxDepth = sessionLimit(opts.maxDepth);
+  const maxFiles = sessionLimit(opts.maxFiles);
   const out: string[] = [];
-
-  const visit = (dir: string, depth: number): void => {
-    if (depth > maxDepth || out.length >= maxFiles) return;
-    for (const entry of safeReaddir(dir)) {
-      if (out.length >= maxFiles) return;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        visit(full, depth + 1);
-      } else if (entry.isFile()) {
-        if (exts.some((e) => entry.name.endsWith(e))) out.push(full);
-      }
-    }
+  const pending = [{ dir: root, depth: 0 }];
+  const incomplete = (reason: string): void => {
+    if (opts.onIncomplete) opts.onIncomplete(reason);
+    else throw new Error(reason);
   };
 
-  visit(root, 0);
+  while (pending.length) {
+    const { dir, depth } = pending.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      // A missing store is a valid empty source; disappearing child directories
+      // and permission/I/O failures are not authoritative listings.
+      if (dir === root && (err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      incomplete("Could not enumerate a session directory");
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory() && opts.recursive !== false) {
+        if (depth >= maxDepth) incomplete("Session traversal depth cap reached");
+        else pending.push({ dir: full, depth: depth + 1 });
+      } else if (entry.isFile() && exts.some(e => entry.name.endsWith(e))) {
+        if (out.length >= maxFiles) {
+          incomplete("Session traversal file cap reached");
+          return out;
+        }
+        out.push(full);
+      }
+    }
+  }
   return out;
+}
+
+/** Shared validation: omitted means uncapped; zero is an explicit empty scan. */
+export function sessionLimit(value?: number): number {
+  if (value === undefined) return Infinity;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error("Session limit must be a non-negative safe integer");
+  }
+  return value;
 }
 
 /** List file-backed metadata, checking the scan cache before reading content. */
@@ -100,17 +129,24 @@ export function listFileSessions(
   opts: ListOptions = {},
 ): ExternalSession[] {
   const out: ExternalSession[] = [];
-  const limit = opts.maxSessions ?? 5000;
+  const limit = sessionLimit(opts.maxSessions);
   for (const file of files) {
-    if (out.length >= limit) break;
+    if (out.length >= limit) {
+      opts.onIncomplete?.("Session listing cap reached");
+      break;
+    }
     let session: ExternalSession | null = null;
     if (opts.reuseUnchanged) {
       const stat = safeStat(file);
-      if (!stat) continue;
+      if (!stat) {
+        opts.onIncomplete?.("Could not stat a session file");
+        continue;
+      }
       session = opts.reuseUnchanged(file, stat);
     }
     session ??= parse(file);
     if (session) out.push(session);
+    else opts.onIncomplete?.("Could not read or parse a session file");
   }
   return out;
 }
@@ -334,11 +370,11 @@ export const SEARCH_TEXT_BUDGET = 20_000;
  */
 export function addSearchText(acc: string[], role: string, text: string): void {
   if (role !== "user" && role !== "assistant") return;
-  // Cap the accumulator so a pathological session cannot blow up memory. Well
-  // above the budget, because searchTextFrom samples both ends.
-  if (acc.length >= 400) return;
   const clean = cleanText(text);
   if (!clean) return;
+  // Keep the opening 200 records and a rolling tail of 200, not just the
+  // first 400. Otherwise searchTextFrom's "tail" misses the actual ending.
+  if (acc.length >= 400) acc.splice(200, acc.length - 399);
   acc.push(clip(clean, 4000));
 }
 
@@ -354,10 +390,11 @@ export function searchTextFrom(acc: string[]): string | null {
   if (acc.length === 0) return null;
   const full = acc.join(" ");
   if (full.length <= SEARCH_TEXT_BUDGET) return full;
-  const half = Math.floor(SEARCH_TEXT_BUDGET / 2);
+  const separator = "\n\u2026\n";
+  const half = Math.floor((SEARCH_TEXT_BUDGET - separator.length) / 2);
   const head = full.slice(0, half).trimEnd();
   const tail = full.slice(full.length - half).trimStart();
-  return `${head}\n\u2026\n${tail}`;
+  return `${head}${separator}${tail}`;
 }
 
 /** Count occurrences of tool names. */

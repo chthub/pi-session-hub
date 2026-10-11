@@ -10,6 +10,7 @@
  */
 
 import path from "node:path";
+import { readSessionRows, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
@@ -23,13 +24,13 @@ import { clip, cleanText, cleanTranscriptText } from "../security.ts";
 import { openReadOnly } from "../sqlite.ts";
 import {
   addSearchText,
-  countTools,
   extractCommand,
   isoFromSec,
   probePath,
   pushCommand,
   pushTranscriptBlocks,
   safeStat,
+  sessionLimit,
   searchTextFrom,
   titleFromPreview,
   uniqSorted,
@@ -82,7 +83,9 @@ export class CrushAdapter implements SessionAdapter {
   }
 
   async listSessions(opts?: { maxSessions?: number }): Promise<ExternalSession[]> {
-    const limit = opts?.maxSessions ?? 2000;
+    // SQLite LIMIT -1 means no limit; history is uncapped by default.
+    const requested = sessionLimit(opts?.maxSessions);
+    const limit = requested === Infinity ? -1 : requested;
     const db = await openReadOnly(this.dbPath);
     if (!db) {
       if (probePath(this.dbPath) !== "missing") throw new Error("could not open source database strictly read-only");
@@ -112,15 +115,16 @@ export class CrushAdapter implements SessionAdapter {
       );
       if (!row) return null;
 
-      const messages: { role: string; text: string }[] = [];
-      const toolNames: string[] = [];
+      const notes = [TRANSCRIPT_FORMAT_NOTE, "SQLite detail read in bounded pages; concurrent edits are not a transactional snapshot"];
+      const messages = transcriptMessages(notes);
+      const toolNames = toolCounter(notes);
       const commands: string[] = [];
       let hasToolResults = false;
       let hasReasoning = false;
 
-      const rows = db.all<{ role: string; parts: string; model: string | null }>(
+      const rows = readSessionRows<{ role: string; parts: string; model: string | null }>(db,
         `select role, parts, model from messages
-         where session_id = ? order by created_at, id limit 4000`,
+         where session_id = ? order by created_at, id`,
         [nativeId],
       );
       for (const m of rows) {
@@ -135,7 +139,7 @@ export class CrushAdapter implements SessionAdapter {
         if (toolResult) hasToolResults = true;
         for (const t of tools) toolNames.push(t);
         pushCommand(commands, command);
-        if (opts.includeToolActivity) pushTranscriptBlocks(messages, m.role, parts, opts);
+        if (opts.includeToolActivity) pushTranscriptBlocks(messages, m.role, parts, { ...opts, max: Infinity });
         else {
           const clean = opts.preserveFormatting ? cleanTranscriptText(text) : cleanText(text);
           if (clean) messages.push({ role: m.role, text: clip(clean, 4000) });
@@ -146,13 +150,14 @@ export class CrushAdapter implements SessionAdapter {
       const base = this.toSession(db, row, stat);
       return {
         ...base,
-        messageCount: opts.includeToolActivity ? base.messageCount : messages.length || base.messageCount,
+        messageCount: db.get<{ n: number }>("select count(*) as n from messages where session_id = ?", [nativeId])?.n ?? base.messageCount,
         toolCount: toolNames.length,
         messages,
-        tools: summarize(toolNames),
+        tools: summarize(toolNames.counts),
         commands,
         fidelity: {
           ...base.fidelity,
+          notes: [...base.fidelity.notes, ...notes],
           hasToolCalls: toolNames.length > 0,
           hasToolResults,
           hasReasoning,
@@ -315,8 +320,7 @@ function extractParts(parts: unknown): {
   return out;
 }
 
-function summarize(names: string[]): ToolUseSummary[] {
-  const map = countTools(names);
+function summarize(map: Map<string, number>): ToolUseSummary[] {
   return Array.from(map.entries())
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);

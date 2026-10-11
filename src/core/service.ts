@@ -17,6 +17,7 @@ export class SessionHubService {
   private initializing?: Promise<void>;
   private refreshing?: Promise<ScanResult>;
   private refreshingForce = false;
+  private refreshingLimit = Infinity;
   private report: ScanResult | null = null;
   private detecting?: ReturnType<AdapterRegistry["detectAll"]>;
   private closed = false;
@@ -56,14 +57,16 @@ export class SessionHubService {
     await this.init();
     this.assertOpen();
     if (this.refreshing) {
-      // A forced request must not be swallowed by an incremental scan.
-      if (options.force && !this.refreshingForce) {
+      // A stronger request must not be swallowed by a partial/incremental scan.
+      if ((options.force && !this.refreshingForce)
+        || (options.maxPerHarness ?? Infinity) > this.refreshingLimit) {
         await this.refreshing;
         return this.refresh(options);
       }
       return this.refreshing;
     }
     this.refreshingForce = Boolean(options.force);
+    this.refreshingLimit = options.maxPerHarness ?? Infinity;
     this.refreshing = scan(this.index!, this.registry, options)
       .then(result => { this.report = result; this.detecting = undefined; return result; })
       .finally(() => {

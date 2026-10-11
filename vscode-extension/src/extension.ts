@@ -4,19 +4,26 @@ import { SessionHubService } from "../../src/core/service.ts";
 import { selectPiEnvironment, type PiEnvironment } from "../../src/core/pi-environment.ts";
 import { redact } from "../../src/security.ts";
 import { SessionTree, SessionTreeItem } from "./sessionTree.ts";
+import { SessionStars } from "./sessionStars.ts";
 import { SessionViewer } from "./sessionViewer.ts";
+import { SessionSidebar } from "./sessionSidebar.ts";
 import { TerminalLauncher } from "./terminalLauncher.ts";
 
 let service: SessionHubService | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const hub = new SessionHubService({ home: os.homedir() });
   service = hub;
+  const stars = new SessionStars(context.globalState);
+  try { stars.load(); }
+  catch (error) {
+    await vscode.window.showErrorMessage(redact(`Session Hub: 无法读取会话星标：${error instanceof Error ? error.message : String(error)}`));
+  }
   const tree = new SessionTree(hub, () => (vscode.workspace.workspaceFolders ?? [])
-    .filter(folder => folder.uri.scheme === "file" || folder.uri.scheme === "vscode-remote").map(folder => folder.uri.fsPath), context.extensionUri);
-  const view = vscode.window.createTreeView("sessionHub.sessions", { treeDataProvider: tree });
+    .filter(folder => folder.uri.scheme === "file" || folder.uri.scheme === "vscode-remote").map(folder => folder.uri.fsPath), context.extensionUri, stars);
   const launcher = new TerminalLauncher();
   const uidFrom = (value: unknown): string => {
-    const uid = value instanceof SessionTreeItem ? value.session.uid : value;
+    const uid = value instanceof SessionTreeItem ? value.session.uid
+      : value && typeof value === "object" ? (value as { sessionUid?: unknown }).sessionUid : value;
     if (typeof uid !== "string" || !uid || uid.length > 2000) throw new Error("请选择一条会话");
     return uid;
   };
@@ -44,20 +51,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return refreshing;
   };
   const viewer = new SessionViewer(hub, context.extensionUri, resume, refresh);
+  const copyId = async (uid: string): Promise<void> => {
+    if (!(await hub.getSessionMetadata(uid))) throw new Error("会话不存在");
+    await vscode.env.clipboard.writeText(uid);
+  };
+  const view = new SessionSidebar(tree, context.extensionUri, { open: uid => viewer.open(uid), resume, copyId });
   const command = (name: string, handler: (value: unknown) => Promise<unknown>): vscode.Disposable =>
     vscode.commands.registerCommand(name, async (value: unknown) => {
       try { return await handler(value); }
       catch (error) { await vscode.window.showErrorMessage(redact(`Session Hub: ${error instanceof Error ? error.message : String(error)}`)); }
     });
   context.subscriptions.push({ dispose: () => hub.close() }, tree, view, viewer,
+    vscode.window.registerFileDecorationProvider(tree),
+    vscode.window.registerWebviewViewProvider("sessionHub.sessions", view),
     command("sessionHub.refresh", () => refresh()),
     command("sessionHub.open", value => viewer.open(uidFrom(value))),
     command("sessionHub.resume", value => resume(uidFrom(value))),
-    command("sessionHub.copyId", async value => {
-      const uid = uidFrom(value);
-      if (!(await hub.getSessionMetadata(uid))) throw new Error("会话不存在");
-      await vscode.env.clipboard.writeText(uid);
-    }),
+    command("sessionHub.star", value => tree.setStarred(uidFrom(value), true)),
+    command("sessionHub.unstar", value => tree.setStarred(uidFrom(value), false)),
+    command("sessionHub.copyId", value => copyId(uidFrom(value))),
     vscode.workspace.onDidChangeWorkspaceFolders(() => tree.rescope()));
   try { await hub.init(); await refresh(); }
   catch (error) {

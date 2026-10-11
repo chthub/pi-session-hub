@@ -90,7 +90,7 @@ try {
   fs.closeSync(fd);
   await service.refresh();
   const hugeDetail = await service.getSession("pi:huge");
-  check("oversized append-only transcript is never silently called complete", hugeDetail.fidelity.notes.some(note => note.includes("truncated")) && !hugeDetail.messages.some(m => m.text.includes("latest beyond cap")));
+  check("oversized append-only transcript recovers latest records and reports skipped padding", hugeDetail.fidelity.notes.some(note => note.includes("source records omitted")) && hugeDetail.messages.some(m => m.text.includes("latest beyond cap")));
   fs.unlinkSync(huge);
   await service.refresh();
 
@@ -109,6 +109,30 @@ try {
   await empty.init(); await empty.refresh();
   check("empty stores yield an empty service without real-home dependencies", (await empty.listSessions()).length === 0);
   empty.close();
+
+  // A full refresh arriving during a capped scan must run after it, not inherit
+  // its partial result. Use an empty synthetic registry to isolate orchestration.
+  const concurrentRegistry = new AdapterRegistry(path.join(temp, "concurrent"));
+  const concurrentAdapter = concurrentRegistry.get("pi");
+  const limits = [];
+  let releasePartial;
+  let partialStarted;
+  const partialGate = new Promise(resolve => { releasePartial = resolve; });
+  const partialBegan = new Promise(resolve => { partialStarted = resolve; });
+  concurrentAdapter.listSessions = async opts => {
+    limits.push(opts.maxSessions);
+    if (limits.length === 1) { partialStarted(); await partialGate; }
+    return [];
+  };
+  const concurrentService = new SessionHubService({ home: path.join(temp, "concurrent"), registry: concurrentRegistry });
+  try {
+    const partial = concurrentService.refresh({ maxPerHarness: 1 });
+    await partialBegan;
+    const full = concurrentService.refresh();
+    releasePartial();
+    await Promise.all([partial, full]);
+    check("uncapped refresh is not swallowed by an in-flight capped scan", limits.length === 2 && limits[0] === 1 && (limits[1] === undefined || limits[1] === Infinity));
+  } finally { concurrentService.close(); }
 
   const closingRegistry = new AdapterRegistry(home);
   let release;

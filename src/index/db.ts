@@ -11,7 +11,9 @@ import path from "node:path";
 import type { ExternalSession, HarnessId, SessionDetail } from "../types.ts";
 import { exec, openIndexDb, type ReadOnlyDb } from "../sqlite.ts";
 
-export const SCHEMA_VERSION = "2";
+export const SCHEMA_VERSION = "3";
+/** Bump when metadata parsing changes; stale fingerprints never bypass parsing. */
+export const PARSER_VERSION = "2";
 
 export interface IndexedSessionRow {
   uid: string;
@@ -72,6 +74,7 @@ const SCHEMA = [
      harness TEXT NOT NULL,
      path TEXT NOT NULL,
      uid TEXT,
+     parser_version TEXT,
      mtime_ms REAL,
      size INTEGER,
      PRIMARY KEY (harness, path)
@@ -109,6 +112,11 @@ export async function openIndex(dbPath: string): Promise<IndexHandle | null> {
       WHERE s.harness = sources.harness AND s.path = sources.path
         AND s.mtime_ms = sources.mtime_ms AND s.size = sources.size
     )`);
+  }
+  // Old head-only metadata must be re-read, without deleting indexed history.
+  // Per-source revisions also survive capped/failed upgrades and interrupted scans.
+  if (!db.all<{ name: string }>("PRAGMA table_info(sources)").some(col => col.name === "parser_version")) {
+    exec(db, "ALTER TABLE sources ADD COLUMN parser_version TEXT");
   }
   exec(db, `INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)`, [
     SCHEMA_VERSION,
@@ -169,10 +177,10 @@ export function indexedFileSessions(handle: IndexHandle, harness: HarnessId): Ex
   }>(
     `select s.*, f.path as source_path, f.mtime_ms as source_mtime_ms, f.size as source_size
      from sources f join sessions s on s.harness = f.harness and s.uid = f.uid
-     where s.harness = ? and (
+     where s.harness = ? and f.parser_version = ? and (
        f.path != s.path or (f.mtime_ms = s.mtime_ms and f.size = s.size)
      )`,
-    [harness],
+    [harness, PARSER_VERSION],
   ).map(row => ({
     ...rowToSession(row),
     path: row.source_path,
@@ -188,8 +196,8 @@ export function sourceFingerprint(
   path: string,
 ): { mtime_ms: number; size: number } | null {
   const row = handle.db.get<{ mtime_ms: number; size: number }>(
-    "select mtime_ms, size from sources where harness = ? and path = ?",
-    [harness, path],
+    "select mtime_ms, size from sources where harness = ? and path = ? and parser_version = ?",
+    [harness, path, PARSER_VERSION],
   );
   return row ?? null;
 }
@@ -203,8 +211,8 @@ export function setSourceFingerprint(
   uid: string | null = null,
 ): void {
   exec(handle.db,
-    "INSERT OR REPLACE INTO sources (harness, path, mtime_ms, size, uid) VALUES (?, ?, ?, ?, ?)",
-    [harness, path, mtimeMs, size, uid],
+    "INSERT OR REPLACE INTO sources (harness, path, mtime_ms, size, uid, parser_version) VALUES (?, ?, ?, ?, ?, ?)",
+    [harness, path, mtimeMs, size, uid, PARSER_VERSION],
   );
 }
 

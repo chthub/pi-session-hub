@@ -11,7 +11,7 @@
  */
 
 import path from "node:path";
-import { readSessionText } from "./reader.ts";
+import { readSessionJson, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
@@ -24,7 +24,6 @@ import type { ListOptions, NativeResumeAction, SessionAdapter, SessionReadOption
 import { clip, cleanText, cleanTranscriptText } from "../security.ts";
 import {
   addSearchText,
-  countTools,
   deriveRepo,
   extractCommand,
   parseIso,
@@ -74,11 +73,11 @@ export class JCodeAdapter implements SessionAdapter {
     };
   }
 
-  private files(): string[] {
-    // maxDepth 0 keeps us in the sessions root only. Subdirectories such as
+  private files(opts?: ListOptions): string[] {
+    // The source format keeps transcripts in the sessions root only. Subdirectories such as
     // `edit-stats/` hold per-session statistics with the same filename shape and
     // must not be mistaken for transcripts.
-    return walkFiles(this.root, { exts: [".json"], maxDepth: 0, maxFiles: 20000 }).filter(
+    return walkFiles(this.root, { exts: [".json"], recursive: false, onIncomplete: opts?.onIncomplete }).filter(
       (f) => {
         const base = path.basename(f);
         return (
@@ -90,7 +89,7 @@ export class JCodeAdapter implements SessionAdapter {
   }
 
   async listSessions(opts?: ListOptions): Promise<ExternalSession[]> {
-    return listFileSessions(this.files(), file => this.parse(file, false)?.session ?? null, opts);
+    return listFileSessions(this.files(opts), file => this.parse(file, false)?.session ?? null, opts);
   }
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
@@ -129,33 +128,10 @@ export class JCodeAdapter implements SessionAdapter {
   private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
-    const read = readSessionText(file);
-    if (!read?.content) return null;
-    const text = read.content;
-
-    let doc: Record<string, unknown>;
-    try {
-      doc = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-
-    const nativeId =
-      typeof doc.id === "string" && doc.id
-        ? doc.id
-        : path.basename(file, ".json");
-
-    const cwd = typeof doc.working_dir === "string" ? doc.working_dir : null;
-    const title = typeof doc.title === "string" && doc.title.trim() ? doc.title.trim() : null;
-    const model = typeof doc.model === "string" ? doc.model : null;
-    const providerKey = typeof doc.provider_key === "string" ? doc.provider_key : null;
-    const importedFrom = nativeId.startsWith("imported_")
-      ? nativeId.split("_")[1] ?? null
-      : null;
-
-    const messages: { role: string; text: string }[] = [];
+    const notes: string[] = withMessages ? [TRANSCRIPT_FORMAT_NOTE] : [];
+    const messages = transcriptMessages(notes);
     const searchAcc: string[] = [];
-    const toolNames: string[] = [];
+    const toolNames = toolCounter(notes);
     const commands: string[] = [];
     const filesChanged = new Set<string>();
     const filesRead = new Set<string>();
@@ -163,9 +139,8 @@ export class JCodeAdapter implements SessionAdapter {
     let hasReasoning = false;
     let messageCount = 0;
 
-    const rawMessages = Array.isArray(doc.messages) ? doc.messages : [];
-    for (const m of rawMessages) {
-      if (!m || typeof m !== "object") continue;
+    const read = readSessionJson(file, m => {
+      if (!m || typeof m !== "object") return;
       const msg = m as Record<string, unknown>;
       const role = typeof msg.role === "string" ? msg.role : "unknown";
       messageCount++;
@@ -196,19 +171,28 @@ export class JCodeAdapter implements SessionAdapter {
       const joined = withMessages && preserveFormatting ? cleanTranscriptText(prose.join("\n")) : cleanText(prose.join("\n"));
       if (joined) addSearchText(searchAcc, role, joined);
       if (withMessages && includeToolActivity) {
-        pushTranscriptBlocks(messages, role, content, { preserveFormatting });
-        continue;
+        pushTranscriptBlocks(messages, role, content, { preserveFormatting, max: Infinity });
+        return;
       }
-      if (!withMessages && role === "user" && messages.length >= 3) continue;
+      if (!withMessages && (role !== "user" || messages.length >= 3)) return;
       if (joined) messages.push({ role, text: clip(joined, 4000) });
-    }
+    });
+    // Callback output is never used when the enclosing JSON is invalid.
+    if (!read) return null;
+    notes.push(...read.notes);
+    const doc = read.doc;
+    const nativeId = typeof doc.id === "string" && doc.id ? doc.id : path.basename(file, ".json");
+    const cwd = typeof doc.working_dir === "string" ? doc.working_dir : null;
+    const title = typeof doc.title === "string" && doc.title.trim() ? doc.title.trim() : null;
+    const model = typeof doc.model === "string" ? doc.model : null;
+    const providerKey = typeof doc.provider_key === "string" ? doc.provider_key : null;
+    const importedFrom = nativeId.startsWith("imported_") ? nativeId.split("_")[1] ?? null : null;
 
     const preview = messages.find((m) => m.role === "user")?.text ?? null;
     const label = importedFrom
       ? `JCode (imported from ${importedFrom}) session ${nativeId.slice(0, 12)}`
       : `JCode session ${nativeId.slice(0, 12)}`;
 
-    const notes: string[] = [...read.notes];
     if (importedFrom) {
       notes.push(
         `this session was imported into JCode from ${importedFrom}; the original transcript may have had more detail`,
@@ -244,7 +228,7 @@ export class JCodeAdapter implements SessionAdapter {
         size: stat.size,
       },
       messages,
-      tools: countTools(toolNames),
+      tools: toolNames.counts,
       commands,
     };
   }

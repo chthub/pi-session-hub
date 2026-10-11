@@ -15,6 +15,7 @@ import { CodexAdapter } from "./codex.ts";
 import { OpenCodeAdapter } from "./opencode.ts";
 import { CrushAdapter } from "./crush.ts";
 import { JCodeAdapter } from "./jcode.ts";
+import { sessionLimit } from "./util.ts";
 
 export class AdapterRegistry {
   private readonly adapters = new Map<HarnessId, SessionAdapter>();
@@ -75,10 +76,11 @@ export class AdapterRegistry {
     return results;
   }
 
-  async listAll(maxPerHarness = 2000): Promise<{
+  async listAll(maxPerHarness?: number): Promise<{
     sessions: ExternalSession[];
     errors: { harness: HarnessId; message: string }[];
   }> {
+    sessionLimit(maxPerHarness);
     const sessions: ExternalSession[] = [];
     const errors: { harness: HarnessId; message: string }[] = [];
 
@@ -92,7 +94,7 @@ export class AdapterRegistry {
 
     for (const [index, result] of settled.entries()) {
       if (result.status === "fulfilled") {
-        sessions.push(...result.value.list);
+        for (const session of result.value.list) sessions.push(session);
       } else {
         const message =
           result.reason instanceof Error ? result.reason.message : String(result.reason);

@@ -1,0 +1,106 @@
+import * as vscode from "vscode";
+import fs from "node:fs";
+import { randomBytes } from "node:crypto";
+import { redact } from "../../src/security.ts";
+import type { SessionTree } from "./sessionTree.ts";
+import type { ProjectScope } from "./projectScope.ts";
+
+const PAGE_SIZE = 100;
+const SCOPES = ["current", "unscoped", "other"] as const;
+type SidebarAction = "ready" | "more" | "open" | "star" | "resume" | "copyId";
+interface SidebarRequest { type: "sessionHub.sidebar"; id: number; action: SidebarAction; uid?: string; starred?: boolean; scope?: ProjectScope }
+
+function parseRequest(value: unknown): SidebarRequest {
+  if (!value || typeof value !== "object") throw new Error("无效的侧栏请求");
+  const r = value as Record<string, unknown>;
+  if (r.type !== "sessionHub.sidebar" || !Number.isSafeInteger(r.id) || Number(r.id) < 1) throw new Error("无效的侧栏请求");
+  const keys = ["type", "id", "action"];
+  switch (r.action) {
+    case "ready": break;
+    case "more":
+      keys.push("scope");
+      if (!SCOPES.includes(r.scope as ProjectScope)) throw new Error("未知的项目分组");
+      break;
+    case "star":
+      keys.push("starred");
+      if (typeof r.starred !== "boolean") throw new Error("无效的星标状态");
+      // falls through: star requests must also identify a known UID.
+    case "open": case "resume": case "copyId":
+      keys.push("uid");
+      if (typeof r.uid !== "string" || !r.uid || r.uid.length > 2000) throw new Error("无效的会话 ID");
+      break;
+    default: throw new Error("未知的侧栏操作");
+  }
+  if (Object.keys(r).some(key => !keys.includes(key))) throw new Error("侧栏请求包含不允许的字段");
+  return r as unknown as SidebarRequest;
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
+}
+
+/** The sidebar is a view, not an editor tab or an HTTP server. Its only inputs
+ * are validated UIDs/actions; paths and arbitrary commands never cross the API. */
+export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Disposable {
+  private view?: vscode.WebviewView;
+  private ready = false;
+  private status: string | undefined = "正在读取会话索引…";
+  private readonly limits: Record<ProjectScope, number> = { current: PAGE_SIZE, unscoped: PAGE_SIZE, other: PAGE_SIZE };
+  private viewDisposables: vscode.Disposable[] = [];
+  private readonly changed: vscode.Disposable;
+  constructor(private readonly tree: SessionTree, private readonly extensionUri: vscode.Uri,
+    private readonly actions: { open: (uid: string) => Promise<void>; resume: (uid: string) => Promise<void>; copyId: (uid: string) => Promise<void> }) {
+    this.changed = tree.onDidChangeTreeData(() => this.publish());
+  }
+
+  set message(value: string | undefined) { this.status = value; this.publish(); }
+  get message(): string | undefined { return this.status; }
+
+  resolveWebviewView(view: vscode.WebviewView): void {
+    this.releaseView();
+    this.view = view;
+    const media = vscode.Uri.joinPath(this.extensionUri, "media");
+    view.webview.options = { enableScripts: true, localResourceRoots: [media] };
+    this.viewDisposables.push(view.webview.onDidReceiveMessage(async (value: unknown) => {
+      const id = value && typeof value === "object" ? (value as { id?: unknown }).id : undefined;
+      if (!Number.isSafeInteger(id) || Number(id) < 1) return;
+      const response: { type: string; id: number; error?: string } = { type: "sessionHub.sidebar.result", id: Number(id) };
+      try {
+        const request = parseRequest(value);
+        if (request.uid && !this.tree.hasSession(request.uid)) throw new Error("会话不存在；请刷新后重试");
+        switch (request.action) {
+          case "ready": this.ready = true; this.publish(); break;
+          case "more": this.limits[request.scope!] += PAGE_SIZE; this.publish(); break;
+          case "star": await this.tree.setStarred(request.uid!, request.starred!); break;
+          case "open": await this.actions.open(request.uid!); break;
+          case "resume": await this.actions.resume(request.uid!); break;
+          case "copyId": await this.actions.copyId(request.uid!); break;
+        }
+      } catch (error) { response.error = redact(error instanceof Error ? error.message : String(error)); }
+      if (this.view === view) await view.webview.postMessage(response);
+    }), view.onDidDispose(() => { if (this.view === view) this.releaseView(); }));
+    const nonce = randomBytes(24).toString("hex");
+    const resource = (file: string) => escapeAttribute(view.webview.asWebviewUri(vscode.Uri.joinPath(media, file)).toString());
+    const source = escapeAttribute(view.webview.cspSource);
+    view.webview.html = fs.readFileSync(vscode.Uri.joinPath(media, "sidebar.html").fsPath, "utf8")
+      .replaceAll("{{cspSource}}", source).replaceAll("{{nonce}}", nonce)
+      .replace("{{style}}", resource("sidebar.css")).replace("{{script}}", resource("sidebar.js"));
+  }
+
+  private publish(): void {
+    const view = this.view;
+    if (!view || !this.ready) return;
+    const groups = this.tree.sidebarGroups(this.limits).map(group => ({ ...group,
+      sessions: group.sessions.map(row => ({ ...row, icons: {
+        light: view.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "harness", "light", `${row.harness}.svg`)).toString(),
+        dark: view.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "harness", "dark", `${row.harness}.svg`)).toString(),
+      } })),
+    }));
+    void Promise.resolve(view.webview.postMessage({ type: "sessionHub.sidebar.state", groups, status: this.status ? redact(this.status) : "" })).catch(() => {});
+  }
+  private releaseView(): void {
+    this.view = undefined; this.ready = false;
+    for (const disposable of this.viewDisposables.splice(0)) disposable.dispose();
+  }
+  dispose(): void { this.changed.dispose(); this.releaseView(); }
+}

@@ -14,6 +14,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { readSessionRows, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
@@ -27,7 +28,6 @@ import { clip, cleanText, cleanTranscriptText } from "../security.ts";
 import { openReadOnly, type ReadOnlyDb } from "../sqlite.ts";
 import {
   addSearchText,
-  countTools,
   deriveRepo,
   extractCommand,
   isoFromMs,
@@ -36,6 +36,7 @@ import {
   pushToolCall,
   pushToolResult,
   safeStat,
+  sessionLimit,
   searchTextFrom,
   titleFromPreview,
   uniqSorted,
@@ -95,7 +96,9 @@ export class OpenCodeAdapter implements SessionAdapter {
   }
 
   async listSessions(opts?: { maxSessions?: number }): Promise<ExternalSession[]> {
-    const limit = opts?.maxSessions ?? 2000;
+    // SQLite LIMIT -1 means no limit; history is uncapped by default.
+    const requested = sessionLimit(opts?.maxSessions);
+    const limit = requested === Infinity ? -1 : requested;
     const db = await openReadOnly(this.dbPath);
     if (!db) {
       if (probePath(this.dbPath) !== "missing") throw new Error("could not open source database strictly read-only");
@@ -136,21 +139,21 @@ export class OpenCodeAdapter implements SessionAdapter {
       );
       if (!row) return null;
 
-      const messages: { role: string; text: string }[] = [];
-      const toolNames: string[] = [];
+      const notes = [TRANSCRIPT_FORMAT_NOTE, "SQLite detail read in bounded pages; concurrent edits are not a transactional snapshot"];
+      const messages = transcriptMessages(notes);
+      const toolNames = toolCounter(notes);
       const commands: string[] = [];
       let hasReasoning = false;
       let hasToolResults = false;
 
       // Join through `message` so each part carries its author's role. The part
       // payload itself has no role field.
-      const parts = db.all<{ data: string; mdata: string | null }>(
+      const parts = readSessionRows<{ data: string; mdata: string | null }>(db,
         `select p.data as data, m.data as mdata
          from part p
          left join message m on m.id = p.message_id
          where p.session_id = ?
-         order by p.time_created, p.id
-         limit 4000`,
+         order by p.time_created, p.id`,
         [nativeId],
       );
       for (const p of parts) {
@@ -172,9 +175,9 @@ export class OpenCodeAdapter implements SessionAdapter {
           pushCommand(commands, extractCommand(tool, o.state ?? o));
           if (opts.includeToolActivity) {
             const state = o.state && typeof o.state === "object" ? o.state as Record<string, unknown> : o;
-            pushToolCall(messages, tool, "input" in state ? state.input : o.input, o.callID ?? o.call_id ?? o.id);
-            if ("output" in state) pushToolResult(messages, state.output, tool, o.callID ?? o.call_id ?? o.id);
-            else if ("error" in state) pushToolResult(messages, `错误：${String(state.error)}`, tool, o.callID ?? o.call_id ?? o.id);
+            pushToolCall(messages, tool, "input" in state ? state.input : o.input, o.callID ?? o.call_id ?? o.id, Infinity);
+            if ("output" in state) pushToolResult(messages, state.output, tool, o.callID ?? o.call_id ?? o.id, Infinity);
+            else if ("error" in state) pushToolResult(messages, `错误：${String(state.error)}`, tool, o.callID ?? o.call_id ?? o.id, Infinity);
           }
           continue;
         }
@@ -193,19 +196,18 @@ export class OpenCodeAdapter implements SessionAdapter {
         if (t) messages.push({ role, text: clip(t, 4000) });
       }
 
-      const sourceCount = opts.includeToolActivity
-        ? db.get<{ n: number }>("select count(*) as n from message where session_id = ?", [nativeId])?.n ?? messages.length
-        : messages.length;
+      const sourceCount = db.get<{ n: number }>("select count(*) as n from message where session_id = ?", [nativeId])?.n ?? messages.length;
       const base = this.toSession(db, row, sourceCount);
       return {
         ...base,
-        messageCount: opts.includeToolActivity ? sourceCount : messages.length || base.messageCount,
+        messageCount: sourceCount,
         toolCount: toolNames.length,
         messages,
-        tools: summarize(toolNames),
+        tools: summarize(toolNames.counts),
         commands,
         fidelity: {
           ...base.fidelity,
+          notes: [...base.fidelity.notes, ...notes],
           hasToolCalls: toolNames.length > 0,
           hasToolResults,
           hasReasoning,
@@ -394,8 +396,7 @@ function collectPathsFromAny(value: unknown, out: Set<string>, depth = 0): void 
   }
 }
 
-function summarize(names: string[]): ToolUseSummary[] {
-  const map = countTools(names);
+function summarize(map: Map<string, number>): ToolUseSummary[] {
   return Array.from(map.entries())
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);

@@ -39,12 +39,15 @@ export interface ScanResult {
   scanned: HarnessId[];
   /** Harnesses that failed. Their indexed sessions are preserved, not deleted. */
   failed: HarnessId[];
+  /** Successfully listed, but not authoritative for deletion (caps/read gaps). */
+  incomplete: HarnessId[];
   durationMs: number;
 }
 
 export interface ScanOptions {
   /** Ignore fingerprints and re-read every source. */
   force?: boolean;
+  /** Optional work cap. Capped scans never prune, even below the cap. */
   maxPerHarness?: number;
   onProgress?: (p: ScanProgress) => void;
 }
@@ -60,6 +63,9 @@ export async function scan(
   registry: AdapterRegistry,
   opts: ScanOptions = {},
 ): Promise<ScanResult> {
+  if (opts.maxPerHarness !== undefined && (!Number.isSafeInteger(opts.maxPerHarness) || opts.maxPerHarness < 0)) {
+    throw new Error("maxPerHarness must be a non-negative safe integer");
+  }
   const started = Date.now();
   const adapters = registry.active();
   const result: ScanResult = {
@@ -72,11 +78,13 @@ export async function scan(
     errors: [],
     scanned: [],
     failed: [],
+    incomplete: [],
     durationMs: 0,
   };
 
   const seen = new Set<string>();
   const succeeded = new Set<HarnessId>();
+  const complete = new Set<HarnessId>();
   let done = 0;
 
   for (const adapter of adapters) {
@@ -90,13 +98,16 @@ export async function scan(
     let sessions: ExternalSession[] = [];
     const reused = new Set<ExternalSession>();
     let cachedUids = new Set<string>();
+    let incomplete = opts.maxPerHarness !== undefined;
+    const gaps = new Set<string>();
     try {
       const cached = !opts.force && !DB_BACKED.includes(adapter.id)
         ? new Map(indexedFileSessions(handle, adapter.id).map(s => [s.path, s]))
         : null;
       cachedUids = new Set(cached ? [...cached.values()].map(s => s.uid) : []);
       sessions = await adapter.listSessions({
-        maxSessions: opts.maxPerHarness ?? 2000,
+        maxSessions: opts.maxPerHarness,
+        onIncomplete: reason => { incomplete = true; gaps.add(reason); },
         reuseUnchanged: cached ? (path, stat) => {
           const prev = cached.get(path);
           if (prev && prev.mtimeMs === stat.mtimeMs && prev.size === stat.size) {
@@ -107,6 +118,9 @@ export async function scan(
         } : undefined,
       });
       succeeded.add(adapter.id);
+      if (incomplete) result.incomplete.push(adapter.id);
+      else complete.add(adapter.id);
+      if (gaps.size) result.errors.push({ harness: adapter.id, message: [...gaps].join("; ") });
     } catch (err) {
       result.errors.push({
         harness: adapter.id,
@@ -154,12 +168,11 @@ export async function scan(
     done++;
   }
 
-  // Drop sessions that vanished from every source, but ONLY for harnesses that
-  // were actually read this pass. Without this guard, a single transient adapter
-  // failure would delete that harness's entire slice of the index.
+  // Only an uncapped, complete listing is evidence of deletion. Partial or
+  // failed scans can add/update rows, but must preserve all undiscovered rows.
   const stale = handle.db
     .all<{ uid: string; harness: HarnessId }>("select uid, harness from sessions")
-    .filter((row) => succeeded.has(row.harness) && !seen.has(row.uid))
+    .filter((row) => complete.has(row.harness) && !seen.has(row.uid))
     .map((row) => row.uid);
   if (stale.length > 0) {
     transaction(handle, () => removeSessions(handle, stale));

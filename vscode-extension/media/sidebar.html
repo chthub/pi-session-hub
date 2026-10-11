@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}'; style-src {{cspSource}}; img-src {{cspSource}}; connect-src 'none'; font-src 'none';">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="{{style}}">
+  <title>会话历史</title>
+</head>
+<body data-vscode-context='{"preventDefaultContextMenuItems":true}'>
+  <p id="status" role="status" aria-live="polite">正在加载会话…</p>
+  <main id="groups" aria-label="按项目分组的会话"></main>
+  <script nonce="{{nonce}}" src="{{script}}"></script>
+</body>
+</html>

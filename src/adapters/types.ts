@@ -8,8 +8,10 @@ import type {
 } from "../types.ts";
 
 export interface ListOptions {
-  /** Hard cap on sessions returned by a single adapter. */
+  /** Optional cap on returned sessions; omitted means all history. */
   maxSessions?: number;
+  /** Report any incomplete discovery/read so scans cannot prune unseen rows. */
+  onIncomplete?: (reason: string) => void;
   /** File-backed scans may reuse indexed metadata before reading the source.
    * Return null to read/parse the file normally. */
   reuseUnchanged?: (path: string, stat: { mtimeMs: number; size: number }) => ExternalSession | null;

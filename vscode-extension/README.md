@@ -17,10 +17,10 @@ npm run package --prefix vscode-extension
 
 1. 用 Remote SSH 连接 Linux 服务器，打开项目目录。
 2. 在扩展面板中执行 **Install from VSIX…**，选择生成的 `pi-session-hub-vscode-0.1.0.vsix`，确认安装位置是远程 SSH 主机。
-3. 打开 Activity Bar 的 **Session Hub**。会话树按「当前项目」「项目未识别」「其他项目」分组，支持多根工作区。
+3. 打开 Activity Bar 的 **Session Hub**。两行卡片按「当前项目」「项目未识别」「其他项目」分组，支持多根工作区。第一行完整用于标题，第二行显示工具、时间和星标按钮。长标题省略显示，悬停可查看全文。
 4. 点击会话，在编辑器标签页阅读 Markdown、数学公式、分组工具活动；右侧目录可按用户消息跳转，工具栏可切换原文。
 5. 点击 **在终端中继续**，确认命令后进入原生 Pi / Claude 等 CLI 的 TUI。右键菜单也可继续或复制带 harness 前缀的会话 ID。
-6. 新会话或历史更新后，点击会话树顶部的刷新按钮。
+6. 新会话或历史更新后，点击侧栏顶部的刷新按钮。每个分组先显示 100 条，点击「加载更多」继续浏览，不限制索引中的历史总量。
 
 无需启动 HTTP 服务、打开浏览器或转发端口。原有 Pi `/session-hub` 与独立 Web Viewer 继续可用；VS Code 是新增 host，不是替代品。
 
@@ -30,11 +30,19 @@ npm run package --prefix vscode-extension
 code --install-extension vscode-extension/pi-session-hub-vscode-0.1.0.vsix --force
 ```
 
-会话树每条记录使用与 TUI 一致的 harness 图标（Pi π、Claude ✻、Codex ⬡、OpenCode ⌘、Crush ❯、JCode ◆），由本地 SVG 提供明暗两套颜色，不依赖终端字体。
+点击卡片第二行始终可见的 **☆** 按钮，即可加星标：按钮变为 **★**，标题和左边框变为金黄色，整张卡片带淡金色背景。再次点击取消高亮。星标按钮不会打开正文或触发重新扫描，已有星标也会自动恢复高亮。按钮支持 Tab 聚焦和空格/Enter 操作。
+
+点击第一行标题打开会话。卡片右键菜单保留打开、继续、复制 ID、加星标/取消星标，不改变原有排序、分组或正文。
+
+颜色会随深色、浅色和高对比度主题调整，也可通过 `workbench.colorCustomizations` 中的 `sessionHub.starredForeground` 自定义；扩展不会修改用户的主题设置。
+
+星标只保存在 VS Code 扩展的 `globalState` 中，以完整的 `harness:nativeId` 为键；同一扩展存储环境内刷新、重启或切换工作区后仍保留。Remote SSH 使用远程扩展宿主的存储，不承诺跨主机或 VS Code Profile 同步。暂时未扫描到的会话不会自动清除星标。加星标/取消星标不会修改来源记录、Hub 索引或工作区设置；保存失败会提示错误，卡片高亮保持不变。
+
+会话卡片第二行使用与 TUI 一致的 harness 图标（Pi π、Claude ✻、Codex ⬡、OpenCode ⌘、Crush ❯、JCode ◆），由本地 SVG 提供明暗两套颜色，不依赖终端字体。
 
 正文保留 HTTP/mailto 超链接。项目内相对文件链接按**来源会话的 cwd** 解析，点击交给 VS Code 打开对应文件（HTML 默认打开源文件，安装预览扩展后可预览）；Remote SSH 时打开远程文件，不在本机拼路径。不启动网页服务。缺少 cwd、越出项目目录、凭据文件或危险协议的链接不启用；文件消失会明确报错。独立 HTTP 阅读器仍禁用本地文件链接。
 
-Session 标签中的标题最多显示 20 个字符，过长显示 `…`，不会拆开 emoji。完整标题仍保留在会话树和正文中；扩展不修改 VS Code 的编辑器标签宽度设置。
+Session 标签中的标题最多显示 20 个字符，过长显示 `…`，不会拆开 emoji。完整标题仍保留在会话卡片的悬停提示和正文中；扩展不修改 VS Code 的编辑器标签宽度设置。
 
 ## Pi 环境配置
 
@@ -60,13 +68,13 @@ Session 标签中的标题最多显示 20 个字符，过长显示 `…`，不�
 
 ## 安全与边界
 
-- 读取远程用户的 `~/.pi`、`~/.claude` 等源记录，只写 `~/.pi/agent/pi-session-hub/` 索引。扩展浏览记录不修改源文件。
+- 读取远程用户的 `~/.pi`、`~/.claude` 等源记录，刷新时写入 `~/.pi/agent/pi-session-hub/` 索引。星标另存于扩展 `globalState`；扩展浏览记录与标记星标不修改源文件。
 - Resume 是明确确认后的独立动作，原生 agent 随后会自行维护会话；其行为不属于历史查看器的只读保证。
-- Webview 通过经过校验的 UID 消息与扩展通信，不能提供任意文件路径、命令或 argv。每个页面只访问绑定的会话；打开本地链接只能提交正文渲染时由宿主签发的 ID，宿主在点击时检查项目边界、符号链接和受保护路径。
-- CSP 禁止 Webview 网络连接及图片加载，脚本、KaTeX 样式和字体全部打包在本地；Markdown 禁止原始 HTML，并尽力脱敏。
+- Webview 通过经过校验的 UID 消息与扩展通信，不能提供任意文件路径、命令或 argv。正文页面只访问绑定的会话，侧栏只操作已加载列表中的会话。打开本地链接只能提交正文渲染时由宿主签发的 ID，宿主在点击时检查项目边界、符号链接和受保护路径。
+- CSP 禁止 Webview 网络连接；侧栏只允许扩展内置的本地图标，正文禁止图片加载。脚本、KaTeX 样式和字体全部打包在本地；Markdown 禁止原始 HTML，并尽力脱敏。侧栏标题通过纯文本 DOM 插入，不解释为 HTML。
 - 在不可信工作区和虚拟工作区中不启用扩展。
 - 继续命令使用来源记录的 cwd；不猜测当前工作区或 session-store 父目录。未记录 cwd 时使用终端默认目录，并在确认框中提示；记录的目录已消失则报错，不静默换目录。
-- 超过 64 MiB 的文件只读取前段，并明确显示 `truncated`：最新消息可能缺失。目前尚未实现分块完整恢复，也保留 adapter 的记录数量与单条文本上限。
+- 大文件改为流式扫描，不再在 64 MiB 处截掉后半段。展示最多保留 8,000 个文本块 / 8 Mi 字符；超出时保留开头三个块和最新部分，并提示省略的中间块数量。单条文本仍有 4k–8k 字符限制。单个源记录/JSON 值有 64 MiB 保护：JSONL 超大或损坏记录会被跳过并提示，后续记录继续读取；整体 JSON 无效或单值超限时读取失败。
 - 子 agent 历史可阅读，但 Claude 子 agent 记录不能通过 `--resume` 继续。
 - CLI 必须已安装并在远程环境 PATH 中可用；这不是 agent runtime 的安装器。
 
@@ -80,12 +88,13 @@ npm run test:web:browser
 npm run test:vscode
 ```
 
-VS Code 自动测试使用真实的共享 core、SQLite 和 Markdown，模拟 VS Code API 验证会话树、Webview 消息、安全边界和终端选项。**它不等于真正 Remote SSH 验收。**
+VS Code 自动测试使用真实的共享 core、SQLite 和 Markdown，模拟 VS Code API 验证分组、侧栏/正文 Webview 消息、安全边界和终端选项。`npm run test:vscode:browser` 使用 Chrome 检查真实侧栏布局、星标点击/键盘操作、主题、分页和滚动位置。**它们不等于真正 Remote SSH 验收。**
 
 本次 Remote SSH 工作流已完成用户手工测试。升级、变更配置或发布新版本时，仍应在真实 Remote SSH 窗口检查：
 
 - `Developer: Show Running Extensions` 中 Session Hub 位于远程工作区扩展宿主。
-- 当前项目的 Pi / Claude 历史出现在会话树中，未识别项目的记录仍可访问。
+- 当前项目的 Pi / Claude 历史以两行卡片显示，标题独占第一行；未识别项目的记录仍可访问，加载更多能显示较旧记录。
+- 点击第二行星标按钮后显示 `★` 和整卡高亮，不打开正文、不重新扫描；再次点击取消。刷新、Reload Window 和切换工作区后星标仍保留，右键继续/复制 ID 仍可用。
 - 点击历史不会打开浏览器，Ports 面板不新增服务；正文、公式、工具组、原文切换与用户目录正常。
 - Pi / Claude 的继续动作分别进入真实原生 TUI，cwd 正确，既有 plugins / skills / 环境继续生效。
 - Pi `/session-hub` 和 `npm run web` 均仍正常。

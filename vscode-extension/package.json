@@ -13,20 +13,33 @@
   "activationEvents": ["onView:sessionHub.sessions"],
   "capabilities": { "untrustedWorkspaces": { "supported": false }, "virtualWorkspaces": false },
   "contributes": {
+    "colors": [{
+      "id": "sessionHub.starredForeground",
+      "description": "Session Hub 已加星标会话的标题颜色。",
+      "defaults": { "dark": "#E2B647", "light": "#8A6000", "highContrast": "#FFD700", "highContrastLight": "#805500" }
+    }],
     "viewsContainers": { "activitybar": [{ "id": "sessionHub", "title": "Session Hub", "icon": "media/session-hub.svg" }] },
-    "views": { "sessionHub": [{ "id": "sessionHub.sessions", "name": "会话历史" }] },
+    "views": { "sessionHub": [{ "type": "webview", "id": "sessionHub.sessions", "name": "会话历史" }] },
     "commands": [
       { "command": "sessionHub.refresh", "title": "Session Hub: 刷新索引", "icon": "$(refresh)" },
       { "command": "sessionHub.open", "title": "Session Hub: 打开会话" },
       { "command": "sessionHub.resume", "title": "Session Hub: 在终端中继续" },
-      { "command": "sessionHub.copyId", "title": "Session Hub: 复制会话 ID" }
+      { "command": "sessionHub.copyId", "title": "Session Hub: 复制会话 ID" },
+      { "command": "sessionHub.star", "title": "Session Hub: 加星标", "icon": "$(star-empty)" },
+      { "command": "sessionHub.unstar", "title": "Session Hub: 取消星标", "icon": "$(star-full)" }
     ],
     "menus": {
       "view/title": [{ "command": "sessionHub.refresh", "when": "view == sessionHub.sessions", "group": "navigation" }],
-      "view/item/context": [
-        { "command": "sessionHub.open", "when": "view == sessionHub.sessions && viewItem == session", "group": "1_open" },
-        { "command": "sessionHub.resume", "when": "view == sessionHub.sessions && viewItem == session", "group": "1_open" },
-        { "command": "sessionHub.copyId", "when": "view == sessionHub.sessions && viewItem == session", "group": "2_copy" }
+      "webview/context": [
+        { "command": "sessionHub.open", "when": "webviewId == sessionHub.sessions && webviewSection == session", "group": "1_open" },
+        { "command": "sessionHub.resume", "when": "webviewId == sessionHub.sessions && webviewSection == session", "group": "1_open" },
+        { "command": "sessionHub.copyId", "when": "webviewId == sessionHub.sessions && webviewSection == session", "group": "2_copy" },
+        { "command": "sessionHub.star", "when": "webviewId == sessionHub.sessions && webviewSection == session && !sessionStarred", "group": "3_star" },
+        { "command": "sessionHub.unstar", "when": "webviewId == sessionHub.sessions && webviewSection == session && sessionStarred", "group": "3_star" }
+      ],
+      "commandPalette": [
+        { "command": "sessionHub.star", "when": "false" },
+        { "command": "sessionHub.unstar", "when": "false" }
       ]
     }
   },

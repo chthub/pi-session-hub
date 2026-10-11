@@ -25,7 +25,10 @@ let checks = 0;
 function check(name, value) { assert.ok(value, name); console.log(`PASS ${name}`); checks++; }
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 check("manifest prefers the remote workspace host", manifest.extensionKind.join() === "workspace");
-check("manifest contributes Activity Bar, tree and commands", manifest.contributes.viewsContainers.activitybar[0].id === "sessionHub" && manifest.contributes.views.sessionHub[0].id === "sessionHub.sessions" && manifest.contributes.commands.length === 4);
+check("manifest contributes Activity Bar, two-line webview sidebar and commands", manifest.contributes.viewsContainers.activitybar[0].id === "sessionHub" && manifest.contributes.views.sessionHub[0].id === "sessionHub.sessions" && manifest.contributes.views.sessionHub[0].type === "webview" && manifest.contributes.commands.length === 6);
+const starColor = manifest.contributes.colors.find(color => color.id === "sessionHub.starredForeground");
+check("star color supplies dark/light/high-contrast defaults without changing user settings",
+  ["dark", "light", "highContrast", "highContrastLight"].every(theme => /^#[a-f0-9]{6}$/i.test(starColor.defaults[theme])));
 check("untrusted/virtual workspaces cannot launch runtimes", manifest.capabilities.untrustedWorkspaces.supported === false && manifest.capabilities.virtualWorkspaces === false);
 check("compiled entry and shared media are packaged locally", fs.existsSync(path.join(root, manifest.main)) && ["index.html", "style.css", "app.js", "transport.js", "katex/katex.min.css"].every(file => fs.existsSync(path.join(root, "dist/media", file))));
 for (const request of [
@@ -123,25 +126,30 @@ class EventEmitter {
   dispose() { this.callbacks = []; }
 }
 class Uri {
-  constructor(fsPath) { this.fsPath = fsPath; this.scheme = "file"; }
+  constructor(fsPath) { this.fsPath = fsPath; this.path = fsPath; this.scheme = "file"; this.authority = ""; }
+  static from(parts) { return Object.assign(new Uri(parts.path), parts); }
   static joinPath(uri, ...parts) { return new Uri(path.join(uri.fsPath, ...parts)); }
   static file(fsPath) { return new Uri(fsPath); }
   with(changes) { return Object.assign(new Uri(this.fsPath), changes); }
-  toString() { return `file://${this.fsPath}`; }
+  toString() { return `${this.scheme}://${this.authority}${this.path}`; }
 }
 class TreeItem { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState; } }
 const commands = new Map(), panels = [], terminals = [], errors = [], settingUpdates = [], environmentPicks = [], confirmations = [];
 const openedFiles = [];
+const decorationProviders = new Set();
 let clipboard, tree, view, workspaceChanged, confirmation = "在终端中继续", pickedProfile = "default", extension;
 const vscode = {
   Disposable, EventEmitter, Uri, TreeItem, ThemeIcon: class { constructor(id) { this.id = id; } },
+  ThemeColor: class { constructor(id) { this.id = id; } },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, ViewColumn: { Active: -1 },
   workspace: { workspaceFolders: [{ uri: new Uri(project) }], onDidChangeWorkspaceFolders(callback) { workspaceChanged = callback; return new Disposable(); },
     getConfiguration(section) { assert.equal(section, "workbench.editor"); return { async update(key, value, target) { settingUpdates.push({ key, value, target }); } }; } },
   commands: { async executeCommand(name, uri) { assert.equal(name, "vscode.open"); openedFiles.push(uri); }, registerCommand(name, callback) { commands.set(name, callback); return new Disposable(() => commands.delete(name)); } },
   env: { clipboard: { async writeText(value) { clipboard = value; } } },
   window: {
-    createTreeView(_id, options) { tree = options.treeDataProvider; view = new Disposable(); return view; },
+    registerFileDecorationProvider(provider) { tree = provider; decorationProviders.add(provider); return new Disposable(() => decorationProviders.delete(provider)); },
+    registerWebviewViewProvider(id, provider) { assert.equal(id, "sessionHub.sessions"); view = provider; return new Disposable(() => { view = undefined; }); },
+    createTreeView() { throw new Error("the two-line sidebar must not create a single-line native tree"); },
     async withProgress(_options, callback) { return callback(); },
     async showWarningMessage(message) { confirmations.push(message); return confirmation; },
     async showQuickPick(items, options) { environmentPicks.push({ items, options }); return items.find(item => item.profile.id === pickedProfile); },
@@ -163,7 +171,44 @@ const vscode = {
     },
   },
 };
-const context = { extensionUri: new Uri(root), subscriptions: [] };
+function mountSidebar() {
+  const callbacks = new Set(), disposeCallbacks = new Set();
+  const sidebar = {
+    webview: { cspSource: "https://local-resource.vscode-cdn.net", responses: [],
+      asWebviewUri(uri) { return { toString: () => `https://local-resource.vscode-cdn.net${encodeURI(uri.fsPath)}` }; },
+      onDidReceiveMessage(callback) { callbacks.add(callback); return new Disposable(() => callbacks.delete(callback)); },
+      async postMessage(response) { this.responses.push(response); return true; },
+      async send(message) { await Promise.all([...callbacks].map(callback => callback(message))); return this.responses.findLast(response => response.type === "sessionHub.sidebar.result" && response.id === message.id); },
+    },
+    onDidDispose(callback) { disposeCallbacks.add(callback); return new Disposable(() => disposeCallbacks.delete(callback)); },
+    dispose() { [...disposeCallbacks].forEach(callback => callback()); },
+    callbacks,
+  };
+  view.resolveWebviewView(sidebar);
+  return sidebar;
+}
+// Persist outside the tool home, just as VS Code owns its own extension storage.
+const stateFile = path.join(temp, "vscode-global-state.json");
+fs.writeFileSync(stateFile, JSON.stringify({ unrelatedPreference: "preserve me" }));
+let stateWrites = 0, failStateWrite = false;
+const globalState = () => ({
+  get(key) { return JSON.parse(fs.readFileSync(stateFile, "utf8"))[key]; },
+  async update(key, value) {
+    stateWrites++;
+    if (failStateWrite) throw new Error("storage full");
+    const saved = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    saved[key] = value;
+    fs.writeFileSync(stateFile, JSON.stringify(saved));
+  },
+});
+const makeContext = () => ({ extensionUri: new Uri(root), subscriptions: [], globalState: globalState(),
+  get workspaceState() { throw new Error("stars must not use workspace state"); } });
+let context = makeContext();
+const disposeExtension = () => {
+  for (const disposable of context.subscriptions.splice(0).reverse()) disposable.dispose();
+  extension?.deactivate();
+  assert.equal(decorationProviders.size, 0, "decoration provider must be disposed with the extension");
+};
 try {
   const entry = path.join(root, manifest.main);
   const nativeRequire = createRequire(entry);
@@ -179,7 +224,16 @@ try {
   module._compile(fs.readFileSync(entry, "utf8"), entry);
   extension = module.exports;
   await extension.activate(context);
-  check("compiled activation uses core without HTTP server or detached launcher", errors.length === 0 && tree && commands.size === 4);
+  check("compiled activation uses core without HTTP server or detached launcher", errors.length === 0 && tree && commands.size === 6);
+  let sidebar = mountSidebar(), sidebarId = 0;
+  const sidebarRequest = (action, fields = {}) => sidebar.webview.send({ type: "sessionHub.sidebar", id: ++sidebarId, action, ...fields });
+  const sidebarState = () => sidebar.webview.responses.findLast(response => response.type === "sessionHub.sidebar.state");
+  await sidebarRequest("ready");
+  check("sidebar loads local assets under strict CSP, without HTTP or transcript content",
+    sidebar.webview.options.localResourceRoots[0].fsPath === path.join(root, "media") &&
+    sidebar.webview.html.includes("connect-src 'none'") && sidebar.webview.html.includes("script-src 'nonce-") &&
+    sidebar.webview.html.includes("sidebar.js") && !sidebar.webview.html.includes("{{") &&
+    sidebarState().groups.length === 3 && !JSON.stringify(sidebarState()).includes(home));
   const groups = tree.getChildren();
   const current = groups.find(group => group.scope === "current");
   const currentItems = tree.getChildren(current);
@@ -259,9 +313,170 @@ try {
   check("closed panels can be reopened", panels.length === 2);
   check("activation and session opens never change editor tab preferences", settingUpdates.length === 0);
 
+  const items = () => tree.getChildren().flatMap(group => tree.getChildren(group));
+  const item = uid => items().find(row => row.id === uid);
+  const snapshot = () => new Map(files(home).sort().map(file => [file, fs.readFileSync(file)]));
+  const unchanged = saved => {
+    assert.deepEqual(files(home).sort(), [...saved.keys()]);
+    for (const [file, bytes] of saved) assert.ok(fs.readFileSync(file).equals(bytes), file);
+  };
+  const menu = manifest.contributes.menus["webview/context"];
+  const menuVisible = (command, row) => {
+    const when = menu.find(entry => entry.command === command).when;
+    assert.ok(when.startsWith("webviewId == sessionHub.sessions && webviewSection == session"));
+    if (!row.session) return false;
+    return when.endsWith("&& !sessionStarred") ? row.contextValue === "session"
+      : when.endsWith("&& sessionStarred") ? row.contextValue === "sessionStarred" : true;
+  };
+  const beforeSidebarActions = snapshot();
+  for (const [action, fields] of [
+    ["open", { uid: "/etc/passwd" }], ["star", { uid: "pi:missing", starred: true }],
+    ["star", { uid: pi.session.uid, starred: "yes" }], ["open", { uid: pi.session.uid, path: pi.session.path }],
+    ["resume", { uid: pi.session.uid, args: ["bad"] }], ["more", { scope: "unknown" }],
+    ["ready", { uid: pi.session.uid }], ["execute", { command: "bad" }],
+  ]) assert.ok((await sidebarRequest(action, fields)).error);
+  check("sidebar rejects unknown UIDs, paths, argv, extra fields and forged actions", true);
+  const sidebarRows = () => sidebarState().groups.flatMap(group => group.sessions);
+  await sidebarRequest("star", { uid: pi.session.uid, starred: true });
+  check("second-row star action publishes confirmed highlighted state without changing source/index bytes", sidebarRows().find(row => row.uid === pi.session.uid).starred === true);
+  failStateWrite = true;
+  assert.ok((await sidebarRequest("star", { uid: pi.session.uid, starred: false })).error);
+  check("sidebar star failure keeps saved highlight unchanged", sidebarRows().find(row => row.uid === pi.session.uid).starred === true);
+  failStateWrite = false;
+  await sidebarRequest("star", { uid: pi.session.uid, starred: false });
+  assert.equal(sidebarRows().find(row => row.uid === pi.session.uid).starred, false);
+  const panelCount = panels.length;
+  await sidebarRequest("open", { uid: pi.session.uid });
+  assert.equal(panels.length, panelCount);
+  await sidebarRequest("copyId", { uid: pi.session.uid });
+  assert.equal(clipboard, pi.session.uid);
+  await commands.get("sessionHub.copyId")({ sessionUid: claude.session.uid, webviewSection: "session" });
+  assert.equal(clipboard, claude.session.uid);
+  unchanged(beforeSidebarActions);
+  check("sidebar opens existing editors and context menus resolve UIDs without source writes", true);
+
+  const originalSessions = tree.sessions;
+  const originalFolders = vscode.workspace.workspaceFolders;
+  try {
+    vscode.workspace.workspaceFolders = [{ uri: new Uri(project) }];
+    // Pagination-only fixture: no source parsing or index modifications needed.
+    tree.sessions = Array.from({ length: 205 }, (_, i) => ({ ...pi.session, uid: `pi:page-${i}`, repo: project, cwd: project }));
+    tree.rescope();
+    let group = sidebarState().groups.find(g => g.scope === "current");
+    assert.equal(group.total, 205); assert.equal(group.sessions.length, 100);
+    await sidebarRequest("more", { scope: "current" });
+    assert.equal(sidebarState().groups.find(g => g.scope === "current").sessions.length, 200);
+    await sidebarRequest("more", { scope: "current" });
+    group = sidebarState().groups.find(g => g.scope === "current");
+    assert.equal(group.sessions.length, 205);
+    assert.equal(new Set(group.sessions.map(row => row.uid)).size, 205);
+    check("sidebar pages large groups without dropping or duplicating old sessions", true);
+  } finally { tree.sessions = originalSessions; vscode.workspace.workspaceFolders = originalFolders; tree.rescope(); }
+  const oldSidebar = sidebar;
+  sidebar = mountSidebar();
+  await sidebarRequest("ready");
+  check("recreated sidebar restores current state and detaches old message listeners", oldSidebar.callbacks.size === 0 && sidebarRows().some(row => row.uid === pi.session.uid));
+
+  let starChanges = 0;
+  tree.onDidChangeTreeData(() => { starChanges++; });
+  const decorationChanges = [];
+  tree.onDidChangeFileDecorations(uri => { decorationChanges.push(uri?.toString()); });
+  const unmarked = item(pi.session.uid);
+  check("tree registers an isolated decoration provider; unstarred rows and groups have no color",
+    decorationProviders.size === 1 && decorationProviders.has(tree) &&
+    tree.provideFileDecoration(unmarked.resourceUri) === undefined && tree.getChildren().every(group => !group.resourceUri));
+  check("session decoration identities are opaque and do not expose source paths or native IDs",
+    unmarked.resourceUri.scheme === "session-hub" && unmarked.resourceUri.authority === "sessions" &&
+    /^\/[a-f0-9]{64}$/.test(unmarked.resourceUri.path) && new Set(items().map(row => row.resourceUri.toString())).size === items().length);
+  check("only unstarred session rows offer Star; groups offer neither star action",
+    menuVisible("sessionHub.star", unmarked) && !menuVisible("sessionHub.unstar", unmarked) &&
+    tree.getChildren().every(group => !menuVisible("sessionHub.star", group) && !menuVisible("sessionHub.unstar", group)));
+  const beforeStars = snapshot();
+  await commands.get("sessionHub.star")(unmarked);
+  const marked = item(pi.session.uid);
+  const decoration = tree.provideFileDecoration(marked.resourceUri);
+  check("star applies the theme color immediately without an extra badge or parent propagation",
+    decoration.color.id === "sessionHub.starredForeground" && decoration.propagate === false && !decoration.badge &&
+    decorationChanges.length === 1 && decorationChanges[0] === marked.resourceUri.toString() &&
+    marked.resourceUri.toString() === unmarked.resourceUri.toString());
+  check("decorations never color real source files, unrelated resources or other sessions",
+    tree.provideFileDecoration(Uri.file(pi.session.path)) === undefined &&
+    tree.provideFileDecoration(marked.resourceUri.with({ scheme: "other" })) === undefined &&
+    tree.provideFileDecoration(Uri.from({ scheme: "session-hub", authority: "sessions", path: "/unknown" })) === undefined &&
+    tree.provideFileDecoration(claude.resourceUri) === undefined);
+  check("star visibly marks the full tree title while preserving UID, icon, description and open action",
+    marked.label === `★ ${longPrompt}` && marked.id === unmarked.id && marked.tooltip.includes("已加星标") &&
+    marked.contextValue === "sessionStarred" && marked.description === unmarked.description &&
+    marked.iconPath.light.fsPath === unmarked.iconPath.light.fsPath && marked.command.arguments[0] === unmarked.id && starChanges === 1);
+  check("starred rows offer Unstar and retain Open, Resume and Copy ID menus",
+    !menuVisible("sessionHub.star", marked) && menuVisible("sessionHub.unstar", marked) &&
+    ["sessionHub.open", "sessionHub.resume", "sessionHub.copyId"].every(command => menuVisible(command, marked)));
+  const savedStars = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  assert.deepEqual(savedStars, { unrelatedPreference: "preserve me", "sessionHub.starredSessionUids.v1": [pi.session.uid] });
+  await commands.get("sessionHub.copyId")(marked);
+  assert.equal(clipboard, pi.session.uid);
+  await commands.get("sessionHub.open")(marked);
+  check("star does not mark viewer titles or transcript metadata", !panels.at(-1).title.startsWith("★"));
+  failStateWrite = true;
+  const changesBeforeFailure = starChanges;
+  const decorationsBeforeFailure = decorationChanges.length;
+  await commands.get("sessionHub.unstar")(marked);
+  check("failed unstar reports an error without changing visible or durable state",
+    errors.at(-1).includes("无法保存会话星标") && item(pi.session.uid).contextValue === "sessionStarred" &&
+    starChanges === changesBeforeFailure && JSON.stringify(JSON.parse(fs.readFileSync(stateFile, "utf8"))) === JSON.stringify(savedStars));
+  await commands.get("sessionHub.star")(claude);
+  check("failed star never displays an unsaved mark", item(claude.session.uid).contextValue === "session" && starChanges === changesBeforeFailure);
+  check("failed star writes leave decoration colors and invalidation state unchanged",
+    decorationChanges.length === decorationsBeforeFailure &&
+    tree.provideFileDecoration(marked.resourceUri)?.color.id === "sessionHub.starredForeground" &&
+    tree.provideFileDecoration(claude.resourceUri) === undefined);
+  failStateWrite = false;
+  const invalidWrites = stateWrites, invalidErrors = errors.length;
+  for (const arg of [undefined, {}, current, "pi:missing", "x".repeat(2001)]) await commands.get("sessionHub.star")(arg);
+  check("invalid, group and missing-session command arguments are safely rejected", stateWrites === invalidWrites && errors.length === invalidErrors + 5);
+  await Promise.all([commands.get("sessionHub.star")(claude), commands.get("sessionHub.unstar")(pi), commands.get("sessionHub.star")(pi)]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8"))["sessionHub.starredSessionUids.v1"], [claude.session.uid, pi.session.uid].sort());
+  unchanged(beforeStars);
+  check("star/unstar including failures and rapid clicks leave ALL source and index files byte-for-byte unchanged", true);
+  await commands.get("sessionHub.refresh")();
+  check("stars survive refresh and reconstructed tree items", item(pi.session.uid).contextValue === "sessionStarred" && item(claude.session.uid).contextValue === "sessionStarred");
+  vscode.workspace.workspaceFolders = [{ uri: new Uri(project) }];
+  workspaceChanged();
+  check("stars survive workspace regrouping", tree.getChildren(tree.getChildren().find(group => group.scope === "current")).some(row => row.id === pi.session.uid && row.contextValue === "sessionStarred"));
+  disposeExtension();
+  vscode.workspace.workspaceFolders = [{ uri: new Uri(path.join(temp, "restarted-workspace")) }];
+  context = makeContext();
+  await extension.activate(context);
+  check("globalState stars survive extension restart in a different workspace", item(pi.session.uid).contextValue === "sessionStarred" && item(claude.session.uid).contextValue === "sessionStarred");
+  check("saved stars regain their theme color after refresh/workspace changes/restart",
+    tree.provideFileDecoration(item(pi.session.uid).resourceUri)?.color.id === "sessionHub.starredForeground" &&
+    tree.provideFileDecoration(item(claude.session.uid).resourceUri)?.color.id === "sessionHub.starredForeground");
+  const beforeUnstar = snapshot();
+  const restoredResource = item(pi.session.uid).resourceUri;
+  const unstarDecorations = [];
+  tree.onDidChangeFileDecorations(uri => { unstarDecorations.push(uri?.toString()); });
+  await commands.get("sessionHub.unstar")(item(pi.session.uid));
+  check("unstar invalidates the same resource and restores default title color immediately",
+    unstarDecorations[0] === restoredResource.toString() && tree.provideFileDecoration(restoredResource) === undefined);
+  check("successful unstar removes marker and restores Star menu", item(pi.session.uid).label === longPrompt && menuVisible("sessionHub.star", item(pi.session.uid)));
+  unchanged(beforeUnstar);
+  disposeExtension();
+  context = makeContext();
+  await extension.activate(context);
+  check("unstar also persists across restart without clearing other stars", item(pi.session.uid).contextValue === "session" && item(claude.session.uid).contextValue === "sessionStarred");
+  disposeExtension();
+  const corruptState = JSON.stringify({ "sessionHub.starredSessionUids.v1": { invalid: true } });
+  fs.writeFileSync(stateFile, corruptState);
+  const errorsBeforeCorrupt = errors.length;
+  context = makeContext();
+  await extension.activate(context);
+  check("corrupt saved star state reports an error but does not prevent browsing", errors.length === errorsBeforeCorrupt + 1 && errors.at(-1).includes("无法读取会话星标") && items().length > 0);
+  await commands.get("sessionHub.star")(item(pi.session.uid));
+  check("corrupt storage is never silently overwritten by a star command", fs.readFileSync(stateFile, "utf8") === corruptState && errors.at(-1).includes("未覆盖已有数据"));
+
 } finally {
-  for (const disposable of context.subscriptions.reverse()) disposable.dispose();
-  extension?.deactivate(); extension?.deactivate();
+  disposeExtension();
+  extension?.deactivate();
   fs.rmSync(temp, { recursive: true, force: true });
 }
 

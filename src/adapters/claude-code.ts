@@ -11,7 +11,7 @@
  */
 
 import path from "node:path";
-import { readSessionText } from "./reader.ts";
+import { readSessionJsonl, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
@@ -28,7 +28,6 @@ import {
 } from "../security.ts";
 import {
   addSearchText,
-  countTools,
   deriveRepo,
   extractCommand,
   isoFromMs,
@@ -84,10 +83,10 @@ export class ClaudeCodeAdapter implements SessionAdapter {
     };
   }
 
-  private files(): string[] {
+  private files(opts?: ListOptions): string[] {
     // Depth 3 reaches <slug>/<uuid>/subagents/*.jsonl as well as the top-level
     // <slug>/*.jsonl sessions.
-    return walkFiles(this.root, { exts: [".jsonl"], maxDepth: 3, maxFiles: 20000 });
+    return walkFiles(this.root, { exts: [".jsonl"], onIncomplete: opts?.onIncomplete });
   }
 
   /** Top-level sessions only: the ones Claude Code can actually resume by id. */
@@ -96,7 +95,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
   }
 
   async listSessions(opts?: ListOptions): Promise<ExternalSession[]> {
-    return listFileSessions(this.files(), file => this.parse(file, false)?.session ?? null, opts);
+    return listFileSessions(this.files(opts), file => this.parse(file, false)?.session ?? null, opts);
   }
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
@@ -148,9 +147,9 @@ export class ClaudeCodeAdapter implements SessionAdapter {
   private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
-    const read = readSessionText(file);
-    if (!read?.content) return null;
-    const text = read.content;
+    if (!stat.size) return null;
+    const read = readSessionJsonl(file);
+    if (withMessages) read.notes.push(TRANSCRIPT_FORMAT_NOTE);
 
     let id: string | null = null;
     let cwd: string | null = null;
@@ -160,9 +159,9 @@ export class ClaudeCodeAdapter implements SessionAdapter {
     let agentName: string | null = null;
     let model: string | null = null;
 
-    const messages: { role: string; text: string }[] = [];
+    const messages = transcriptMessages(read.notes);
     const searchAcc: string[] = [];
-    const toolNames: string[] = [];
+    const toolNames = toolCounter(read.notes);
     const commands: string[] = [];
     const filesChanged = new Set<string>();
     const filesRead = new Set<string>();
@@ -170,15 +169,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
     let hasReasoning = false;
     let messageCount = 0;
 
-    for (const raw of text.split("\n")) {
-      const line = raw.trim();
-      if (!line) continue;
-      let e: Record<string, unknown>;
-      try {
-        e = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
+    for (const e of read.records) {
 
       const type = e.type;
       if (typeof e.sessionId === "string" && !id) id = e.sessionId;
@@ -234,7 +225,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
       if (role === "assistant") messageCount++;
 
       if (withMessages && includeToolActivity) {
-        pushTranscriptBlocks(messages, role, content, { preserveFormatting });
+        pushTranscriptBlocks(messages, role, content, { preserveFormatting, max: Infinity });
         continue;
       }
 
@@ -255,6 +246,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
       }
     }
 
+    if (!read.bytesRead) return null;
     if (!id) id = path.basename(file, ".jsonl");
 
     // Sub-agent transcripts reuse the parent's sessionId, so the id alone would
@@ -303,7 +295,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
         size: stat.size,
       },
       messages,
-      tools: countTools(toolNames),
+      tools: toolNames.counts,
       commands,
     };
   }

@@ -6,7 +6,7 @@
  */
 
 import path from "node:path";
-import { readSessionText } from "./reader.ts";
+import { readSessionJsonl, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import { PiEnvironmentDetector, defaultPiEnvironments, type PiEnvironment, type PiEnvironmentResolution } from "../core/pi-environment.ts";
 import { loadPiEnvironments } from "../core/config.ts";
 import type { SessionRef } from "../core/types.ts";
@@ -21,7 +21,6 @@ import type { ListOptions, NativeResumeAction, SessionAdapter, SessionReadOption
 import {
   addSearchText,
   contentToText,
-  countTools,
   deriveRepo,
   extractCommand,
   firstPreview,
@@ -94,12 +93,12 @@ export class PiAdapter implements SessionAdapter {
     };
   }
 
-  private files(): string[] {
-    return walkFiles(this.root, { exts: [".jsonl"], maxDepth: 3, maxFiles: 20000 });
+  private files(opts?: ListOptions): string[] {
+    return walkFiles(this.root, { exts: [".jsonl"], onIncomplete: opts?.onIncomplete });
   }
 
   async listSessions(opts?: ListOptions): Promise<ExternalSession[]> {
-    return listFileSessions(this.files(), file => this.parse(file, false)?.session ?? null, opts);
+    return listFileSessions(this.files(opts), file => this.parse(file, false)?.session ?? null, opts);
   }
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
@@ -153,9 +152,9 @@ export class PiAdapter implements SessionAdapter {
   private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
-    const read = readSessionText(file);
-    if (!read?.content) return null;
-    const text = read.content;
+    if (!stat.size) return null;
+    const read = readSessionJsonl(file);
+    if (withMessages) read.notes.push(TRANSCRIPT_FORMAT_NOTE);
     const environment = new PiEnvironmentDetector(this.home, this.environments);
 
     let id: string | null = null;
@@ -165,9 +164,9 @@ export class PiAdapter implements SessionAdapter {
     let name: string | null = null;
     let model: string | null = null;
 
-    const messages: { role: string; text: string }[] = [];
+    const messages = transcriptMessages(read.notes);
     const searchAcc: string[] = [];
-    const toolNames: string[] = [];
+    const toolNames = toolCounter(read.notes);
     const commands: string[] = [];
     const filesChanged = new Set<string>();
     const filesRead = new Set<string>();
@@ -176,15 +175,7 @@ export class PiAdapter implements SessionAdapter {
     let messageCount = 0;
     let lastTs: string | null = null;
 
-    for (const raw of text.split("\n")) {
-      const line = raw.trim();
-      if (!line) continue;
-      let entry: Record<string, unknown>;
-      try {
-        entry = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
+    for (const entry of read.records) {
       environment.observe(entry);
       const type = entry.type;
       const ts = parseIso(entry.timestamp);
@@ -241,14 +232,16 @@ export class PiAdapter implements SessionAdapter {
       const textPart = contentToText(msg.content);
       if (textPart) addSearchText(searchAcc, role, textPart);
       if (withMessages && includeToolActivity) {
-        if (/tool|function/i.test(role)) pushToolResult(messages, msg.content, msg.toolName, msg.toolCallId ?? msg.tool_call_id, 2000);
-        else pushTranscriptBlocks(messages, role, msg.content, { preserveFormatting, textLimit: 8000, max: 2000 });
+        if (/tool|function/i.test(role)) pushToolResult(messages, msg.content, msg.toolName, msg.toolCallId ?? msg.tool_call_id, Infinity);
+        else pushTranscriptBlocks(messages, role, msg.content, { preserveFormatting, textLimit: 8000, max: Infinity });
       } else if (withMessages) {
-        if (textPart) pushMessage(messages, role, textPart, 1000, preserveFormatting);
+        if (textPart) pushMessage(messages, role, textPart, Infinity, preserveFormatting);
       } else if (role === "user" && messages.length < 3) {
         if (textPart) pushMessage(messages, role, textPart, 3);
       }
     }
+
+    if (!read.bytesRead) return null;
 
     if (!id) {
       const base = path.basename(file, ".jsonl");
@@ -291,7 +284,7 @@ export class PiAdapter implements SessionAdapter {
       piEnvironment: environment.resolve(read.truncated),
       session,
       messages,
-      tools: countTools(toolNames),
+      tools: toolNames.counts,
       commands,
       filesChanged: uniqSorted(filesChanged),
       filesRead: uniqSorted(filesRead),

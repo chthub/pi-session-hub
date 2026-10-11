@@ -8,7 +8,7 @@
  */
 
 import path from "node:path";
-import { readSessionText } from "./reader.ts";
+import { readSessionJsonl, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
   DetectionResult,
@@ -21,7 +21,6 @@ import type { ListOptions, NativeResumeAction, SessionAdapter, SessionReadOption
 import { clip, cleanText, cleanTranscriptText } from "../security.ts";
 import {
   addSearchText,
-  countTools,
   deriveRepo,
   extractCommand,
   isoFromMs,
@@ -71,12 +70,12 @@ export class CodexAdapter implements SessionAdapter {
     };
   }
 
-  private files(): string[] {
-    return walkFiles(this.root, { exts: [".jsonl"], maxDepth: 5, maxFiles: 20000 });
+  private files(opts?: ListOptions): string[] {
+    return walkFiles(this.root, { exts: [".jsonl"], onIncomplete: opts?.onIncomplete });
   }
 
   async listSessions(opts?: ListOptions): Promise<ExternalSession[]> {
-    return listFileSessions(this.files(), file => this.parse(file, false)?.session ?? null, opts);
+    return listFileSessions(this.files(opts), file => this.parse(file, false)?.session ?? null, opts);
   }
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
@@ -115,9 +114,9 @@ export class CodexAdapter implements SessionAdapter {
   private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
-    const read = readSessionText(file);
-    if (!read?.content) return null;
-    const text = read.content;
+    if (!stat.size) return null;
+    const read = readSessionJsonl(file);
+    if (withMessages) read.notes.push(TRANSCRIPT_FORMAT_NOTE);
 
     let id: string | null = null;
     let cwd: string | null = null;
@@ -126,9 +125,9 @@ export class CodexAdapter implements SessionAdapter {
     let model: string | null = null;
     let cliVersion: string | null = null;
 
-    const messages: { role: string; text: string }[] = [];
+    const messages = transcriptMessages(read.notes);
     const searchAcc: string[] = [];
-    const toolNames: string[] = [];
+    const toolNames = toolCounter(read.notes);
     const commands: string[] = [];
     const filesChanged = new Set<string>();
     const filesRead = new Set<string>();
@@ -136,15 +135,7 @@ export class CodexAdapter implements SessionAdapter {
     let hasReasoning = false;
     let messageCount = 0;
 
-    for (const raw of text.split("\n")) {
-      const line = raw.trim();
-      if (!line) continue;
-      let e: Record<string, unknown>;
-      try {
-        e = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
+    for (const e of read.records) {
 
       const ts = parseIso(e.timestamp);
       if (ts) updatedAt = ts;
@@ -177,12 +168,12 @@ export class CodexAdapter implements SessionAdapter {
         const rawArgs = payload.arguments ?? payload.input;
         collectPaths(rawArgs, filesChanged, filesRead);
         pushCommand(commands, extractCommand(name, rawArgs));
-        if (withMessages && includeToolActivity) pushToolCall(messages, name, "arguments" in payload ? payload.arguments : payload.input, payload.call_id ?? payload.id);
+        if (withMessages && includeToolActivity) pushToolCall(messages, name, "arguments" in payload ? payload.arguments : payload.input, payload.call_id ?? payload.id, Infinity);
         continue;
       }
       if (ptype === "custom_tool_call_output" || ptype === "function_call_output") {
         hasToolResults = true;
-        if (withMessages && includeToolActivity) pushToolResult(messages, payload.output, payload.name, payload.call_id);
+        if (withMessages && includeToolActivity) pushToolResult(messages, payload.output, payload.name, payload.call_id, Infinity);
         continue;
       }
       if (ptype !== "message") continue;
@@ -205,6 +196,8 @@ export class CodexAdapter implements SessionAdapter {
         messages.push({ role, text: clean });
       }
     }
+
+    if (!read.bytesRead) return null;
 
     if (!id) {
       const m = /rollout-.*?-([0-9a-f-]{36})\.jsonl$/.exec(path.basename(file));
@@ -242,7 +235,7 @@ export class CodexAdapter implements SessionAdapter {
         size: stat.size,
       },
       messages,
-      tools: countTools(toolNames),
+      tools: toolNames.counts,
       commands,
     };
   }

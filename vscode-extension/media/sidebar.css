@@ -1,0 +1,92 @@
+:root {
+  color-scheme: light dark;
+  --surface: var(--vscode-sideBar-background, #f7f7f7);
+  --foreground: var(--vscode-sideBar-foreground, #303030);
+  --muted: var(--vscode-descriptionForeground, #656565);
+  --hover: var(--vscode-list-hoverBackground, #e8e8e8);
+  --focus: var(--vscode-focusBorder, #007acc);
+  --star: var(--vscode-sessionHub-starredForeground, #8a6000);
+  --border: var(--vscode-contrastBorder, transparent);
+  --font-ui: var(--vscode-font-family, system-ui), "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface: var(--vscode-sideBar-background, #252526);
+    --foreground: var(--vscode-sideBar-foreground, #cccccc);
+    --muted: var(--vscode-descriptionForeground, #a0a0a0);
+    --hover: var(--vscode-list-hoverBackground, #333333);
+    --star: var(--vscode-sessionHub-starredForeground, #e2b647);
+  }
+}
+:root[data-theme="dark"], body.vscode-dark, body.vscode-high-contrast {
+  --surface: var(--vscode-sideBar-background, #252526);
+  --foreground: var(--vscode-sideBar-foreground, #cccccc);
+  --muted: var(--vscode-descriptionForeground, #a0a0a0);
+  --hover: var(--vscode-list-hoverBackground, #333333);
+  --star: var(--vscode-sessionHub-starredForeground, #e2b647);
+}
+body.vscode-light, body.vscode-high-contrast-light {
+  --surface: var(--vscode-sideBar-background, #f7f7f7);
+  --foreground: var(--vscode-sideBar-foreground, #303030);
+  --muted: var(--vscode-descriptionForeground, #656565);
+  --hover: var(--vscode-list-hoverBackground, #e8e8e8);
+  --star: var(--vscode-sessionHub-starredForeground, #8a6000);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0 0 8px;
+  background: var(--surface); color: var(--foreground);
+  font: var(--vscode-font-size, 13px)/1.5 var(--font-ui);
+  overflow-wrap: anywhere;
+}
+button, summary { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, summary:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+button:disabled { cursor: wait; opacity: .65; }
+#status { margin: 8px 10px; overflow-wrap: anywhere; }
+#status:empty { display: none; }
+#status.error { color: var(--vscode-errorForeground, #c43c39); }
+.group { min-width: 0; }
+.group > summary {
+  padding: 5px 8px; position: sticky; top: 0; z-index: 1;
+  background: var(--surface); font-weight: 600; overflow-wrap: anywhere;
+}
+.group-count { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.session-card {
+  margin: 4px 6px; padding: 4px 6px;
+  border: 1px solid var(--border); border-left: 3px solid var(--border);
+  border-radius: 4px; min-width: 0; overflow-wrap: anywhere;
+}
+.session-card:hover { background: var(--hover); }
+.session-title {
+  display: block; width: 100%; min-width: 0; padding: 0 2px;
+  text-align: left; border: 0; background: transparent;
+  line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.session-meta { display: flex; gap: 6px; align-items: center; height: 26px; min-width: 0; padding: 0 2px; line-height: 16px; }
+.session-info {
+  flex: 1; min-width: 0; color: var(--muted); font-size: 11px; line-height: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.harness-icon { display: block; width: 14px; height: 14px; flex: none; }
+.icon-dark { display: none; }
+body.vscode-dark .icon-dark, body.vscode-high-contrast .icon-dark, :root[data-theme="dark"] .icon-dark { display: block; }
+body.vscode-dark .icon-light, body.vscode-high-contrast .icon-light, :root[data-theme="dark"] .icon-light { display: none; }
+.star-button {
+  flex: none; width: 30px; height: 26px; padding: 0;
+  border: 1px solid transparent; border-radius: 3px;
+  background: transparent; color: var(--muted); font-size: 19px; line-height: 22px;
+}
+.star-button:hover { color: var(--star); border-color: var(--star); }
+.session-card.is-starred {
+  border-left-color: var(--star);
+  background: color-mix(in srgb, var(--star) 10%, var(--surface));
+}
+.session-card.is-starred:hover { background: color-mix(in srgb, var(--star) 16%, var(--surface)); }
+.is-starred .session-title, .is-starred .star-button { color: var(--star); }
+.more {
+  display: block; width: calc(100% - 12px); margin: 5px 6px 8px; padding: 4px;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--hover);
+}
+.empty { padding: 4px 10px; color: var(--muted); overflow-wrap: anywhere; }
+body.vscode-high-contrast .session-card, body.vscode-high-contrast-light .session-card { border-color: var(--vscode-contrastBorder, var(--foreground)); }
+body.vscode-high-contrast .is-starred, body.vscode-high-contrast-light .is-starred { border-color: var(--star); }

@@ -18,11 +18,11 @@
 - **Continue work that started elsewhere**: press `Enter` and the selected session's conversation is loaded into the current chat as a tiered, budgeted context package, so the next thing you type already has it.
 - **Read without spending tokens**: `v` opens the recovered transcript in a read-only terminal viewer. Browser and VS Code viewers add Markdown and `$...$` / `$$...$$` math rendering, user-message navigation and grouped tool activity.
 - **Reopen the original tool when you want to**: `n` runs the session's own resume command, with the exact command and its verification basis shown before anything is launched.
-- **Stay in VS Code**: use the native Session Hub sidebar, open history in editor tabs and choose **▶ 在终端中继续** to resume in an integrated terminal. No HTTP server, browser or port forwarding is needed.
+- **Stay in VS Code**: use the two-line Session Hub sidebar, open history in editor tabs and choose **▶ 在终端中继续** to resume in an integrated terminal. No HTTP server, browser or port forwarding is needed.
 - **Restore the Pi configuration environment**: user-configured profile directories are matched against saved system Context paths; missing or conflicting evidence prompts for a choice instead of silently inheriting another account.
 - **Follow your questions**: the shared reader's user-message outline supports search, click-to-jump, previous/next navigation and scroll tracking.
 - **Inspect agent activity**: consecutive tool calls/results share one compact foldout with tool names, arguments, commands and source call IDs.
-- **Stay local and read-only while browsing**: Hub writes only under `~/.pi/agent/pi-session-hub/` and never uploads history. The standalone Web host uses authenticated loopback HTTP; VS Code uses UID-validated `postMessage`. Explicit Resume starts the native agent, which then maintains its own session normally.
+- **Stay local and read-only while browsing**: Hub stores its index under `~/.pi/agent/pi-session-hub/`; VS Code stars use extension-owned storage. It never uploads history. The standalone Web host uses authenticated loopback HTTP; VS Code uses UID-validated `postMessage`. Explicit Resume starts the native agent, which then maintains its own session normally.
 
 ## Package facts
 
@@ -53,7 +53,7 @@
 
 **Standalone CLI**: `pi-session-hub-web [--port 43123] [--no-open]`.
 
-**VS Code**: Session Hub Activity Bar tree, editor history viewer, and Open / Resume / Refresh / Copy Session ID commands. Its separate extension manifest lives in `vscode-extension/package.json`; the counts above describe the Pi host.
+**VS Code**: Session Hub Activity Bar card list, editor history viewer, and Open / Resume / Refresh / Copy Session ID commands. Its separate extension manifest lives in `vscode-extension/package.json`; the counts above describe the Pi host.
 
 **Tools**: `session_hub_enable`, `session_hub_search`, `session_hub_context`.
 
@@ -121,7 +121,7 @@ pi -e /path/to/pi-session-hub
 
    Or type `/session-hub`, or `/hub`. The hub replaces Pi's UI area rather than floating over the chat. For a true alternate-screen takeover, set Pi's own `tuiMode` to `"fullscreen"` in `~/.pi/agent/settings.json`.
 
-3. The first run indexes your harnesses. Scan time depends on store size and filesystem speed. Later scans still walk directories and check file size/modification time, but Pi, Claude Code, Codex and JCode reuse unchanged index entries without reading or parsing their source content. OpenCode and Crush continue to read their databases on each scan; an explicit force reindex also rereads every source. Existing indexes upgrade automatically. If multiple files share a session ID, older indexes may need a one-time read to associate those source paths with the session before they can be reused.
+3. The first run indexes your harnesses without a default session-count cap (including stores with more than 2,000 sessions). Explicitly capped or incomplete scans preserve undiscovered index entries; only complete scans remove vanished sessions. Scan time depends on store size and filesystem speed. Later scans still walk directories and check file size/modification time, but Pi, Claude Code, Codex and JCode reuse unchanged index entries without reading or parsing their source content. OpenCode and Crush continue to read their databases on each scan; an explicit force reindex also rereads every source. Existing indexes upgrade automatically; this reader update reparses older cached file metadata once, even if source size/time is unchanged. If multiple files share a session ID, older indexes may need a one-time read to associate those source paths with the session before they can be reused.
 
 4. Pick a session and press `Enter`. The conversation is loaded into the current chat:
 
@@ -151,12 +151,12 @@ npm run package --prefix vscode-extension
 
 1. Connect to the Linux server with VS Code Remote SSH and open your project.
 2. Use **Install from VSIX…** to install `vscode-extension/pi-session-hub-vscode-0.1.0.vsix` on the **remote SSH host**.
-3. Open **Session Hub** in the Activity Bar. The native tree groups current-project, unscoped and other-project history; multi-root workspaces are supported.
+3. Open **Session Hub** in the Activity Bar. The sidebar groups current-project, unscoped and other-project history; multi-root workspaces are supported. Each session uses two rows: title above, harness/recency and an always-visible star button below. Starred cards have a gold title, border and subtle background.
 4. Click a session to read it in an editor tab: Markdown, local KaTeX, user-message outline, raw/rendered toggle and grouped tool activity use the shared Web Viewer UI.
 5. Choose **在终端中继续** (Resume), confirm, and continue in a native VS Code terminal running the original Pi/Claude/etc TUI. The source-backed cwd takes precedence; no session-store parent or workspace cwd is guessed.
-6. Refresh the tree when source history changes. Context menus offer Open, Resume and Copy Session ID (namespaced UID).
+6. Refresh the sidebar when source history changes. Each group initially shows 100 sessions; **加载更多** reveals older entries without limiting the index. Context menus offer Open, Resume, Copy Session ID (namespaced UID), and star/unstar for important sessions. Stars persist in VS Code's extension-owned storage, not in the source transcripts or shared session index.
 
-Session tab labels limit the prompt/title to 20 Unicode characters, using `…` for long titles. The tree and transcript retain the full title, and no editor tab-sizing settings are changed.
+Session tab labels limit the prompt/title to 20 Unicode characters, using `…` for long titles. Sidebar tooltips and the transcript retain the full title, and no editor tab-sizing settings are changed.
 
 No localhost server, browser or port forwarding is used by this host. VS Code
 1.99+ and a workspace extension-host runtime with Node 22.5+ / `node:sqlite`
@@ -415,7 +415,7 @@ src/native.ts               resume descriptions + legacy Pi detached launcher
 src/security.ts             path guards and secret redaction
 src/tui/                    full-screen hub and transcript viewer
 src/web/                    HTTP host, safe Markdown/math, shared UI + transport boundary
-vscode-extension/           remote workspace tree, editor webviews, native terminal launcher
+vscode-extension/           remote workspace sidebar/editor webviews, native terminal launcher
 bin/web.mjs                 independent Web Viewer CLI
 skills/session-hub/         agent-facing skill
 ```
@@ -503,7 +503,7 @@ npm pack && tar xzf pi-session-hub-*.tgz && pi -e ./package
 - **Claude Code and Codex formats are undocumented.** Parsers are defensive and degrade to filename-derived metadata rather than throwing, but a format change may cost fields until the adapter is updated.
 - **Crush does not record a session working directory**, so those sessions show no repo and cannot be filtered by project.
 - **Claude sub-agent transcripts** are indexed (they contain real work) but marked as not resumable and carry their parent session id in the notes.
-- **Recovered transcripts are bounded**: files over 64 MiB explicitly carry a `truncated` note because only the head is read and latest messages can be absent; chunk hydration is not implemented yet. Adapter limits vary, and Web calls/results are capped at 8k characters per record. Recovery counts and reading-limit notes are shown; the viewer does not promise an unlimited transcript. Grouping does not remove individual recovered records.
+- **Large files are streamed, not cut off at 64 MiB**: JSONL sources are scanned through their end; JCode JSON is parsed one message at a time. A single source record/value still has a 64 MiB guard. Oversized or malformed JSONL records are reported and skipped while later records remain readable; invalid or oversized monolithic JSON values cause that source read to fail. Rendered transcripts retain up to 8,000 blocks / 8 Mi characters, preserving the opening three blocks and the latest tail when middle blocks must be omitted. Fidelity notes report omissions; individual prose/tool blocks remain clipped to 4k–8k characters. The viewer is a bounded recovery, not a lossless source copy.
 - **Search covers a bounded excerpt**, not the entire history of a very long session. Phrases from beyond the sampled window will not match.
 - The screenshot above is the real UI captured from a synthetic home directory so that every harness appears at once. It is illustrative data, not anyone's actual sessions.
 
