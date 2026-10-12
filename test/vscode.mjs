@@ -25,7 +25,7 @@ let checks = 0;
 function check(name, value) { assert.ok(value, name); console.log(`PASS ${name}`); checks++; }
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 check("manifest prefers the remote workspace host", manifest.extensionKind.join() === "workspace");
-check("manifest contributes Activity Bar, two-line webview sidebar and commands", manifest.contributes.viewsContainers.activitybar[0].id === "sessionHub" && manifest.contributes.views.sessionHub[0].id === "sessionHub.sessions" && manifest.contributes.views.sessionHub[0].type === "webview" && manifest.contributes.commands.length === 6);
+check("manifest contributes Activity Bar, two-line webview sidebar and commands", manifest.contributes.viewsContainers.activitybar[0].id === "sessionHub" && manifest.contributes.views.sessionHub[0].id === "sessionHub.sessions" && manifest.contributes.views.sessionHub[0].type === "webview" && manifest.contributes.commands.length === 7);
 const starColor = manifest.contributes.colors.find(color => color.id === "sessionHub.starredForeground");
 check("star color supplies dark/light/high-contrast defaults without changing user settings",
   ["dark", "light", "highContrast", "highContrastLight"].every(theme => /^#[a-f0-9]{6}$/i.test(starColor.defaults[theme])));
@@ -137,7 +137,8 @@ class TreeItem { constructor(label, collapsibleState) { this.label = label; this
 const commands = new Map(), panels = [], terminals = [], errors = [], settingUpdates = [], environmentPicks = [], confirmations = [];
 const openedFiles = [];
 const decorationProviders = new Set();
-let clipboard, tree, view, workspaceChanged, confirmation = "在终端中继续", pickedProfile = "default", extension;
+let clipboard, tree, view, workspaceChanged, confirmation = "在终端中继续", pickedProfile = "default", pickedTarget, pickedCwd, extension;
+const newSessionPicks = [];
 const vscode = {
   Disposable, EventEmitter, Uri, TreeItem, ThemeIcon: class { constructor(id) { this.id = id; } },
   ThemeColor: class { constructor(id) { this.id = id; } },
@@ -152,7 +153,11 @@ const vscode = {
     createTreeView() { throw new Error("the two-line sidebar must not create a single-line native tree"); },
     async withProgress(_options, callback) { return callback(); },
     async showWarningMessage(message) { confirmations.push(message); return confirmation; },
-    async showQuickPick(items, options) { environmentPicks.push({ items, options }); return items.find(item => item.profile.id === pickedProfile); },
+    async showQuickPick(items, options) {
+      if (items[0]?.target) { newSessionPicks.push({ items, options }); return items.find(item => item.target.id === pickedTarget); }
+      if (items[0]?.cwd) { newSessionPicks.push({ items, options }); return items.find(item => item.cwd === pickedCwd); }
+      environmentPicks.push({ items, options }); return items.find(item => item.profile.id === pickedProfile);
+    },
     async showErrorMessage(message) { errors.push(message); },
     createTerminal(options) { const terminal = { options, show() { this.shown = true; } }; terminals.push(terminal); return terminal; },
     createWebviewPanel(_type, title, _column, options) {
@@ -224,7 +229,7 @@ try {
   module._compile(fs.readFileSync(entry, "utf8"), entry);
   extension = module.exports;
   await extension.activate(context);
-  check("compiled activation uses core without HTTP server or detached launcher", errors.length === 0 && tree && commands.size === 6);
+  check("compiled activation uses core without HTTP server or detached launcher", errors.length === 0 && tree && commands.size === 7);
   let sidebar = mountSidebar(), sidebarId = 0;
   const sidebarRequest = (action, fields = {}) => sidebar.webview.send({ type: "sessionHub.sidebar", id: ++sidebarId, action, ...fields });
   const sidebarState = () => sidebar.webview.responses.findLast(response => response.type === "sessionHub.sidebar.state");
@@ -308,6 +313,60 @@ try {
   await commands.get("sessionHub.resume")(pi.session.uid);
   check("missing detected config directory errors instead of switching to default", terminals.length === countBeforeMissing && environmentPicks.length === picksBeforeMissing && errors.at(-1).includes("源 Pi 配置目录不可用"));
   check("environment detection/picking never rewrites a source transcript", fs.readFileSync(piSource).equals(missingDirectory));
+
+  // New blank sessions: only executables found on PATH, Pi once per configured
+  // environment, no argv, workspace folder as cwd.
+  const bin = path.join(temp, "bin with spaces");
+  fs.mkdirSync(bin);
+  for (const name of ["pi", "claude"]) fs.writeFileSync(path.join(bin, name), "#!/bin/sh\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "codex"), "not executable", { mode: 0o644 });
+  const savedPath = process.env.PATH;
+  process.env.PATH = [bin, "relative-bin"].join(path.delimiter);
+  const otherProject = path.join(temp, "second project");
+  fs.mkdirSync(otherProject);
+  vscode.workspace.workspaceFolders = [{ uri: new Uri(project) }];
+  try {
+    check("+ sits beside refresh in the sidebar title bar",
+      manifest.contributes.menus["view/title"].map(entry => entry.command).join() === "sessionHub.newSession,sessionHub.refresh" &&
+      manifest.contributes.commands.find(entry => entry.command === "sessionHub.newSession").icon === "$(add)");
+    let terminalCount = terminals.length;
+    pickedTarget = undefined;
+    await commands.get("sessionHub.newSession")();
+    const offered = newSessionPicks.at(-1).items.map(item => item.target.id);
+    check("new session offers PATH executables only, Pi once per environment",
+      offered.join() === "pi:default,pi:research,pi:team,claude-code" && terminals.length === terminalCount);
+    pickedTarget = "claude-code";
+    await commands.get("sessionHub.newSession")();
+    check("new Claude session starts a blank CLI in the workspace folder without resume argv or confirmation",
+      terminals.length === terminalCount + 1 && terminals.at(-1).shown && terminals.at(-1).options.shellPath === path.join(bin, "claude") &&
+      terminals.at(-1).options.shellArgs.length === 0 && terminals.at(-1).options.cwd === project &&
+      terminals.at(-1).options.env === undefined && terminals.at(-1).options.name.includes("新会话"));
+    pickedTarget = "pi:team";
+    await commands.get("sessionHub.newSession")();
+    check("new Pi session passes the chosen environment explicitly",
+      terminals.at(-1).options.shellPath === path.join(bin, "pi") && terminals.at(-1).options.shellArgs.length === 0 &&
+      terminals.at(-1).options.env.PI_CODING_AGENT_DIR === profiles[2].agentDir);
+    terminalCount = terminals.length;
+    pickedTarget = "pi:research";
+    await commands.get("sessionHub.newSession")();
+    check("missing Pi environment directory errors instead of falling back to default",
+      terminals.length === terminalCount && errors.at(-1).includes("Pi 配置目录不可用"));
+    vscode.workspace.workspaceFolders = [{ uri: new Uri(project) }, { uri: new Uri(otherProject) }];
+    pickedTarget = "claude-code"; pickedCwd = undefined;
+    await commands.get("sessionHub.newSession")();
+    check("multi-root picker cancellation launches nothing", terminals.length === terminalCount &&
+      newSessionPicks.at(-1).items.map(item => item.cwd).join() === [project, otherProject].join());
+    pickedCwd = otherProject;
+    await commands.get("sessionHub.newSession")();
+    check("multi-root new session starts in the chosen folder", terminals.length === terminalCount + 1 && terminals.at(-1).options.cwd === otherProject);
+    process.env.PATH = "";
+    const errorCount = errors.length;
+    await commands.get("sessionHub.newSession")();
+    check("no harness on PATH reports an error instead of guessing", errors.length === errorCount + 1 && errors.at(-1).includes("PATH"));
+  } finally {
+    process.env.PATH = savedPath;
+    vscode.workspace.workspaceFolders = [{ uri: new Uri(path.join(temp, "different")) }];
+  }
   panel.dispose();
   await commands.get("sessionHub.open")(pi.session.uid);
   check("closed panels can be reopened", panels.length === 2);

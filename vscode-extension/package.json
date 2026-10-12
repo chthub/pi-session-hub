@@ -22,6 +22,7 @@
     "views": { "sessionHub": [{ "type": "webview", "id": "sessionHub.sessions", "name": "会话历史" }] },
     "commands": [
       { "command": "sessionHub.refresh", "title": "Session Hub: 刷新索引", "icon": "$(refresh)" },
+      { "command": "sessionHub.newSession", "title": "Session Hub: 新建会话", "icon": "$(add)" },
       { "command": "sessionHub.open", "title": "Session Hub: 打开会话" },
       { "command": "sessionHub.resume", "title": "Session Hub: 在终端中继续" },
       { "command": "sessionHub.copyId", "title": "Session Hub: 复制会话 ID" },
@@ -29,7 +30,10 @@
       { "command": "sessionHub.unstar", "title": "Session Hub: 取消星标", "icon": "$(star-full)" }
     ],
     "menus": {
-      "view/title": [{ "command": "sessionHub.refresh", "when": "view == sessionHub.sessions", "group": "navigation" }],
+      "view/title": [
+        { "command": "sessionHub.newSession", "when": "view == sessionHub.sessions", "group": "navigation@0" },
+        { "command": "sessionHub.refresh", "when": "view == sessionHub.sessions", "group": "navigation@1" }
+      ],
       "webview/context": [
         { "command": "sessionHub.open", "when": "webviewId == sessionHub.sessions && webviewSection == session", "group": "1_open" },
         { "command": "sessionHub.resume", "when": "webviewId == sessionHub.sessions && webviewSection == session", "group": "1_open" },

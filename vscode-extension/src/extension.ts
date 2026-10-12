@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import os from "node:os";
+import path from "node:path";
 import { SessionHubService } from "../../src/core/service.ts";
+import { newSessionTargets, type NewSessionTarget } from "../../src/core/new-session.ts";
 import { selectPiEnvironment, type PiEnvironment } from "../../src/core/pi-environment.ts";
 import { redact } from "../../src/security.ts";
 import { SessionTree, SessionTreeItem } from "./sessionTree.ts";
@@ -18,8 +20,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   catch (error) {
     await vscode.window.showErrorMessage(redact(`Session Hub: 无法读取会话星标：${error instanceof Error ? error.message : String(error)}`));
   }
-  const tree = new SessionTree(hub, () => (vscode.workspace.workspaceFolders ?? [])
-    .filter(folder => folder.uri.scheme === "file" || folder.uri.scheme === "vscode-remote").map(folder => folder.uri.fsPath), context.extensionUri, stars);
+  const tree = new SessionTree(hub, () => workspaceDirs(), context.extensionUri, stars);
   const launcher = new TerminalLauncher();
   const uidFrom = (value: unknown): string => {
     const uid = value instanceof SessionTreeItem ? value.session.uid
@@ -39,6 +40,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       action = selectPiEnvironment(action, selection.profile.id);
     }
     await launcher.launch(action);
+  };
+  const workspaceDirs = (): string[] => (vscode.workspace.workspaceFolders ?? [])
+    .filter(folder => folder.uri.scheme === "file" || folder.uri.scheme === "vscode-remote").map(folder => folder.uri.fsPath);
+  const newSession = async (): Promise<void> => {
+    const targets = newSessionTargets(os.homedir());
+    if (!targets.length) throw new Error("PATH 中没有找到可启动的 harness（pi、claude、codex、opencode、crush、jcode）");
+    const target = await vscode.window.showQuickPick<vscode.QuickPickItem & { target: NewSessionTarget }>(
+      targets.map(target => ({ label: target.label, description: target.executable,
+        detail: target.piEnvironment ? `PI_CODING_AGENT_DIR=${target.piEnvironment.agentDir}` : undefined, target })),
+      { title: "新建会话：选择 harness", placeHolder: "在新终端中启动一个空白对话", ignoreFocusOut: true });
+    if (!target) return;
+    const dirs = workspaceDirs();
+    let cwd: string | undefined = dirs[0];
+    if (dirs.length > 1) {
+      const folder = await vscode.window.showQuickPick<vscode.QuickPickItem & { cwd: string }>(
+        dirs.map(dir => ({ label: path.basename(dir) || dir, description: dir, cwd: dir })),
+        { title: `新建 ${target.label} 会话：选择工作目录`, ignoreFocusOut: true });
+      if (!folder) return;
+      cwd = folder.cwd;
+    }
+    launcher.startNew(target.target, cwd);
   };
   let refreshing: Promise<unknown> | undefined;
   const refresh = (): Promise<unknown> => {
@@ -65,6 +87,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerFileDecorationProvider(tree),
     vscode.window.registerWebviewViewProvider("sessionHub.sessions", view),
     command("sessionHub.refresh", () => refresh()),
+    command("sessionHub.newSession", () => newSession()),
     command("sessionHub.open", value => viewer.open(uidFrom(value))),
     command("sessionHub.resume", value => resume(uidFrom(value))),
     command("sessionHub.star", value => tree.setStarred(uidFrom(value), true)),
