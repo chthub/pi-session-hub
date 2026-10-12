@@ -16,6 +16,9 @@ let outlineButtons = new Map();
 let resizeObserver;
 let measureFrame;
 let scrollFrame;
+// Steps match Chrome's Ctrl+wheel zoom levels.
+const zoomLevels = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+let zoom = readZoom();
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -192,6 +195,35 @@ function captureReadingPosition() {
   const node = Array.from(document.querySelectorAll(".message")).find(item => item.getBoundingClientRect().bottom > top);
   return node ? { id: node.id, offset: node.getBoundingClientRect().top - $("viewer").getBoundingClientRect().top } : null;
 }
+function restoreReadingPosition(reading) {
+  const node = reading && $(reading.id);
+  if (node) $("viewer").scrollTop += node.getBoundingClientRect().top - $("viewer").getBoundingClientRect().top - reading.offset;
+}
+function readZoom() {
+  try {
+    const value = Number(localStorage.getItem("session-hub-zoom"));
+    return zoomLevels.includes(value) ? value : 100;
+  } catch { return 100; }
+}
+function updateZoomControls() {
+  $("zoom-level").textContent = `${zoom}%`;
+  $("zoom-out").disabled = zoom === zoomLevels[0];
+  $("zoom-in").disabled = zoom === zoomLevels[zoomLevels.length - 1];
+}
+function setZoom(value) {
+  if (value === zoom) return;
+  const reading = captureReadingPosition();
+  zoom = value;
+  try { localStorage.setItem("session-hub-zoom", String(zoom)); } catch {}
+  $("transcript-messages").style.zoom = String(zoom / 100);
+  updateZoomControls();
+  restoreReadingPosition(reading);
+  scheduleMeasure();
+}
+function stepZoom(direction) {
+  const index = zoomLevels.indexOf(zoom) + direction;
+  if (index >= 0 && index < zoomLevels.length) setZoom(zoomLevels[index]);
+}
 function isToolMessage(message) { return /tool|function/i.test(message.role); }
 function isToolCall(message) { return /^(toolCall|tool_call|tool_use|function_call|custom_tool_call)$/i.test(message.role); }
 function renderMessageBody(message) {
@@ -274,6 +306,21 @@ function renderDetail(restore = null) {
   });
   toggle.setAttribute("aria-pressed", String(raw));
   actions.append(toggle, button("回到开头", () => viewer.scrollTo({ top: 0 })), button("跳到末尾", () => viewer.scrollTo({ top: viewer.scrollHeight })));
+  const zoomGroup = element("div", undefined, "zoom-controls");
+  zoomGroup.setAttribute("role", "group");
+  zoomGroup.setAttribute("aria-label", "正文缩放");
+  const zoomOut = button("−", () => stepZoom(-1));
+  const zoomLevel = button("100%", () => setZoom(100), "zoom-level");
+  const zoomIn = button("+", () => stepZoom(1));
+  zoomOut.id = "zoom-out";
+  zoomLevel.id = "zoom-level";
+  zoomIn.id = "zoom-in";
+  zoomOut.title = "缩小正文";
+  zoomLevel.title = "恢复 100%";
+  zoomIn.title = "放大正文";
+  for (const control of [zoomOut, zoomLevel, zoomIn]) control.setAttribute("aria-label", control.title);
+  zoomGroup.append(zoomOut, zoomLevel, zoomIn);
+  actions.append(zoomGroup);
   for (const action of transport.sessionActions) {
     const control = button(action.label, async () => {
       try { await action.run(selected); }
@@ -288,12 +335,18 @@ function renderDetail(restore = null) {
   }
   toolbar.append(element("span", "对话正文", "transcript-count"), actions);
   content.append(toolbar);
+  // CSS zoom scales the messages like browser zoom while the toolbar keeps
+  // its size, so the zoom buttons stay under the pointer.
+  const messages = element("div", undefined, "transcript-messages");
+  messages.id = "transcript-messages";
+  messages.style.zoom = String(zoom / 100);
+  content.append(messages);
   for (let index = 0; index < detail.messages.length; index++) {
     const message = detail.messages[index];
     if (isToolMessage(message)) {
       let end = index + 1;
       while (end < detail.messages.length && isToolMessage(detail.messages[end])) end++;
-      content.append(renderToolGroup(index, end, openGroups));
+      messages.append(renderToolGroup(index, end, openGroups));
       index = end - 1;
       continue;
     }
@@ -308,15 +361,16 @@ function renderDetail(restore = null) {
     if (isUser) heading.append(element("span", `第 ${users.length} 次提问`));
     heading.append(element("span", `#${index + 1}`, "message-index"));
     article.append(heading, renderMessageBody(message));
-    content.append(article);
+    messages.append(article);
   }
-  if (!detail.messages.length) content.append(element("p", "来源没有可恢复的文本消息。", "muted"));
+  if (!detail.messages.length) messages.append(element("p", "来源没有可恢复的文本消息。", "muted"));
   viewer.append(content);
+  updateZoomControls();
   $("outline-count").textContent = String(users.length);
   $("outline-filter").disabled = !users.length;
   renderOutline();
   setActiveUser(users[0]?.id || null, false);
-  if (restore && $(restore.id)) viewer.scrollTop += $(restore.id).getBoundingClientRect().top - viewer.getBoundingClientRect().top - restore.offset;
+  restoreReadingPosition(restore);
   resizeObserver = new ResizeObserver(scheduleMeasure);
   resizeObserver.observe(content);
   resizeObserver.observe(viewer);

@@ -84,6 +84,12 @@ main { padding: 24px 28px 48px; overflow-y: auto; min-width: 0; min-height: 0; b
 .transcript-toolbar { position: sticky; top: -24px; z-index: 2; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 -1px 18px; padding: 12px 0; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 12px; }
 .toolbar-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .transcript-toolbar button { padding: 5px 9px; font-size: 12px; }
+.zoom-controls { display: flex; }
+.zoom-controls button { min-width: 30px; border-radius: 0; margin-inline-start: -1px; }
+.zoom-controls button:first-child { border-radius: 9px 0 0 9px; margin-inline-start: 0; }
+.zoom-controls button:last-child { border-radius: 0 9px 9px 0; }
+.zoom-controls button:hover, .zoom-controls button:focus-visible { position: relative; }
+.zoom-controls .zoom-level { min-width: 52px; font-variant-numeric: tabular-nums; }
 .resume-button { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; }
 .resume-button:hover { color: var(--on-accent); background: var(--accent); border-color: var(--accent); filter: brightness(.94); }
 .button-icon { font-size: 11px; line-height: 1; }
