@@ -71,6 +71,24 @@ export async function buildFakeHome(home) {
         timestamp: T0,
         message: { role: "user", content: "fake claude: the migration keeps timing out" },
       },
+      // Harness-injected companions: a loaded skill body and an image size note.
+      {
+        type: "user",
+        sessionId: UUID,
+        cwd: PROJECT,
+        timestamp: T0,
+        isMeta: true,
+        sourceToolUseID: "toolu_fake_skill",
+        message: { role: "user", content: [{ type: "text", text: "Base directory for this skill: /fake/skills/db-tuning" }] },
+      },
+      {
+        type: "user",
+        sessionId: UUID,
+        cwd: PROJECT,
+        timestamp: T0,
+        isMeta: true,
+        message: { role: "user", content: "[Image: original 3420x1620, displayed at 2000x947.]" },
+      },
       {
         type: "assistant",
         sessionId: UUID,

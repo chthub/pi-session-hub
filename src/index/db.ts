@@ -13,7 +13,7 @@ import { exec, openIndexDb, type ReadOnlyDb } from "../sqlite.ts";
 
 export const SCHEMA_VERSION = "3";
 /** Bump when metadata parsing changes; stale fingerprints never bypass parsing. */
-export const PARSER_VERSION = "2";
+export const PARSER_VERSION = "3";
 
 export interface IndexedSessionRow {
   uid: string;

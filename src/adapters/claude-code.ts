@@ -34,6 +34,7 @@ import {
   parseIso,
   probePath,
   pushCommand,
+  pushToolResult,
   pushTranscriptBlocks,
   listFileSessions,
   safeStat,
@@ -196,6 +197,17 @@ export class ClaudeCodeAdapter implements SessionAdapter {
       const content = msg.content;
 
       if (typeof msg.model === "string" && !model) model = msg.model;
+
+      // `isMeta` user records are harness-injected companions, not prompts: a
+      // Skill call's loaded instructions (`sourceToolUseID` names the call) or
+      // the size note after a Read of an image. Show them as tool output.
+      if (e.isMeta === true && role === "user") {
+        if (withMessages && includeToolActivity) {
+          const text = proseOnly(content);
+          if (text) pushToolResult(messages, text, undefined, e.sourceToolUseID);
+        }
+        continue;
+      }
 
       let isToolResultCarrier = false;
       if (Array.isArray(content)) {

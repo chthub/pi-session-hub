@@ -802,6 +802,26 @@ section("11. Portability: a home this project has never seen");
     );
   }
 
+  // Claude Code `isMeta` user records (skill bodies, image size notes) are
+  // injected by the harness and must never read as the user's own prompts.
+  {
+    const row = foreignRows.find((r) => r.harness === "claude-code");
+    const adapter = foreignRegistry.get("claude-code");
+    const prose = row ? await adapter.getSession(row.native_id) : null;
+    const tools = row ? await adapter.getSession(row.native_id, { includeToolActivity: true }) : null;
+    const users = (d) => d?.messages.filter((m) => m.role === "user").map((m) => m.text) ?? [];
+    check(
+      "Claude Code meta records are not user prompts",
+      users(prose).length === 1 && users(tools).length === 1 && row.message_count === 2,
+      JSON.stringify({ prose: users(prose), tools: users(tools), count: row?.message_count }),
+    );
+    check(
+      "Claude Code meta records surface as tool output",
+      tools?.messages.some((m) => m.role === "toolResult" && m.toolCallId === "toolu_fake_skill" && m.text.includes("Base directory")) &&
+        tools.messages.some((m) => m.role === "toolResult" && m.text.startsWith("[Image:")),
+    );
+  }
+
   // Search must reach conversation text for every harness, not just titles. This
   // is the check that caught OpenCode indexing titles only: the probe phrase is
   // absent from the title and present only in the conversation.
