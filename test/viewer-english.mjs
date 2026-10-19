@@ -30,11 +30,13 @@ function englishError(fn) { assert.throws(fn, error => error instanceof Error &&
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "hub-viewer-english-"));
 let chrome, socket, server, cdp, panel, receiver;
-let clipboardFails = false, missingSession = false, dropRequests = false;
+let clipboardFails = false, missingSession = false, dropRequests = false, pdfFails = false, blockPdf = false, finishPdfProgress;
+const pdfWorkspace = path.join(temp, "workspace");
+fs.mkdirSync(pdfWorkspace);
 let lastReadOptions;
-const confirmations = [], terminals = [], responses = [], exceptions = [], requests = [];
+const confirmations = [], terminals = [], responses = [], exceptions = [], requests = [], hostRequests = [];
 class Uri {
-  constructor(fsPath) { this.fsPath = fsPath; }
+  constructor(fsPath) { this.fsPath = fsPath; this.scheme = "file"; }
   static joinPath(uri, ...parts) { return new Uri(path.join(uri.fsPath, ...parts)); }
   static file(file) { return new Uri(file); }
   with(parts) { return Object.assign(new Uri(this.fsPath), parts); }
@@ -42,8 +44,16 @@ class Uri {
 }
 let origin;
 const vscode = {
-  Uri, ViewColumn: { Active: 1 },
+  Uri, ViewColumn: { Active: 1 }, ProgressLocation: { Notification: 15 },
+  workspace: { workspaceFolders: [{ uri: new Uri(pdfWorkspace) }] },
   window: {
+    async withProgress(options, callback) {
+      assert.equal(options.title, "Exporting conversation as PDF…");
+      if (pdfFails) throw new Error("Synthetic PDF export failure");
+      if (blockPdf) await new Promise(resolve => { finishPdfProgress = resolve; });
+      return callback();
+    },
+    async showOpenDialog() { return undefined; },
     createWebviewPanel() {
       panel = {
         webview: {
@@ -68,7 +78,7 @@ const vscode = {
 const synthetic = {
   uid: "pi:synthetic", nativeId: "synthetic", harness: "pi", title: "Synthetic session",
   path: "/synthetic/session.jsonl", cwd: temp, repo: null, model: null,
-  messageCount: 8, fidelity: { hasToolCalls: false, hasToolResults: false, hasReasoning: false, notes: ["Synthetic read limit note"] },
+  messageCount: 8, commands: [], toolCount: 2, fidelity: { hasToolCalls: false, hasToolResults: false, hasReasoning: false, notes: ["Synthetic read limit note"] },
   messages: [
     { role: "user", text: "First question" },
     { role: "assistant", text: "$x^2$\n\n$\\invalidCommand{<script>}$\n\n![Sample image](https://invalid.example/tracker)\n\n[Project file](missing.md)" },
@@ -99,9 +109,14 @@ try {
   // the standalone route keeps the template and its default HTTP transport.
   server = http.createServer((req, res) => {
     const route = new URL(req.url, "http://localhost").pathname;
-    if (route === "/reader" || route === "/") {
+    if (route === "/reader" || route === "/initial-reader" || route === "/") {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.end(route === "/reader" ? panel.webview.html : template);
+      if (route === "/") return res.end(template);
+      // Model the theme style/class which VS Code injects before revealing its iframe.
+      let html = panel.webview.html.replace("<head>", '<head><style>:root { --vscode-editor-background: #1e1e1e; --vscode-editor-foreground: #d4d4d4; }</style>')
+        .replace('<body data-host="vscode"', '<body class="vscode-dark" data-host="vscode"');
+      if (route === "/initial-reader") html = html.replace(/<link[^>]+rel="stylesheet"[^>]*>/g, "").replace(/<script[^>]*><\/script>/g, "");
+      return res.end(html);
     }
     if (route.startsWith("/api/")) {
       res.setHeader("Content-Type", "application/json");
@@ -124,6 +139,7 @@ try {
   origin = `http://127.0.0.1:${server.address().port}`;
   // The host URI API maps packaged media to our synthetic asset directory.
   vscode.Uri.joinPath = (uri, ...parts) => parts.join("/") === "dist/media" ? new Uri(publicDir)
+    : parts.join("/") === "dist/media/katex" ? new Uri(path.join(path.dirname(extensionRequire.resolve("katex/package.json")), "dist"))
     : new Uri(path.join(uri.fsPath, ...parts));
   const viewer = new SessionViewer(service, new Uri(root), async () => { throw new Error("Synthetic resume failure"); }, async () => { throw new Error("Synthetic refresh failure"); });
   await viewer.open(synthetic.uid);
@@ -146,7 +162,10 @@ try {
   socket.addEventListener("message", event => {
     const message = JSON.parse(event.data);
     if (message.id) { const entry = pending.get(message.id); pending.delete(message.id); if (message.error) entry?.reject(new Error(message.error.message)); else entry?.resolve(message.result); }
-    if (message.method === "Runtime.bindingCalled" && !dropRequests) receiver(JSON.parse(message.params.payload)).catch(error => exceptions.push(String(error)));
+    if (message.method === "Runtime.bindingCalled" && !dropRequests) {
+      const request = JSON.parse(message.params.payload); hostRequests.push(request);
+      receiver(request).catch(error => exceptions.push(String(error)));
+    }
     if (message.method === "Runtime.exceptionThrown") exceptions.push(message.params.exceptionDetails);
     if (message.method === "Network.requestWillBeSent") requests.push(message.params.request.url);
   });
@@ -171,9 +190,63 @@ try {
   await cdp("Runtime.enable"); await cdp("Network.enable"); await cdp("Page.enable");
   await cdp("Runtime.addBinding", { name: "syntheticHost" });
   await cdp("Page.addScriptToEvaluateOnNewDocument", { source: 'window.acquireVsCodeApi = () => ({postMessage: message => window.syntheticHost(JSON.stringify(message))});' });
+  await cdp("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+  await cdp("Page.navigate", { url: origin + "/initial-reader" });
+  await wait('document.querySelector("#viewer") !== null');
+  check("initial webview canvas matches the host editor even before CSS/scripts load", await evaluate('getComputedStyle(document.documentElement).backgroundColor === "rgb(30, 30, 30)" && getComputedStyle(document.body).backgroundColor === "rgb(30, 30, 30)" && !window.sessionHubTransport'));
   await cdp("Page.navigate", { url: origin + "/reader" });
   await wait('document.querySelectorAll(".message").length === 6');
+  check("reader follows the VS Code dark theme instead of the light OS preference", await evaluate('!matchMedia("(prefers-color-scheme: dark)").matches && getComputedStyle(document.querySelector("#viewer")).backgroundColor === "rgb(30, 30, 30)" && getComputedStyle(document.body).backgroundColor === "rgb(30, 30, 30)" && document.querySelector("#theme-toggle").title === "Switch to light mode"'));
+  const readsBeforeHide = hostRequests.filter(request => request.operation === "getSession").length;
+  await evaluate(`(() => {
+    window.retainedMessage = document.querySelector(".message");
+    window.retainedTool = document.querySelector(".message-tool"); window.retainedTool.open = true;
+    window.retainedSpacer = document.createElement("div"); window.retainedSpacer.style.height = "1200px";
+    document.querySelector("#transcript-messages").append(window.retainedSpacer);
+    document.querySelector("#viewer").scrollTop = 120;
+    window.retainedScroll = document.querySelector("#viewer").scrollTop;
+    document.documentElement.style.display = "none";
+  })()`);
+  await evaluate('new Promise(resolve => setTimeout(resolve, 60))');
+  await evaluate('document.documentElement.style.removeProperty("display"); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  check("hide/reveal preserves transcript nodes, reading position and expanded tools without re-fetching",
+    hostRequests.filter(request => request.operation === "getSession").length === readsBeforeHide && await evaluate('window.retainedMessage === document.querySelector(".message") && window.retainedTool === document.querySelector(".message-tool") && window.retainedTool.open && Math.abs(document.querySelector("#viewer").scrollTop - window.retainedScroll) < 1'));
+  await evaluate('window.retainedSpacer.remove(); window.retainedTool.open = false; document.querySelector("#viewer").scrollTop = 0');
+  for (const [theme, background, foreground, dark] of [
+    ["vscode-light", "#fafafa", "#111111", false], ["vscode-high-contrast", "#000000", "#ffffff", true],
+    ["vscode-high-contrast-light", "#ffffff", "#000000", false], ["vscode-dark", "#1e1e1e", "#d4d4d4", true],
+  ]) {
+    await evaluate(`document.body.className = ${JSON.stringify(theme)}; document.documentElement.style.setProperty("--vscode-editor-background", ${JSON.stringify(background)}); document.documentElement.style.setProperty("--vscode-editor-foreground", ${JSON.stringify(foreground)});`);
+    await wait(`document.querySelector("#theme-toggle").title === ${JSON.stringify(dark ? "Switch to light mode" : "Switch to dark mode")}`);
+    check(`${theme} palette changes follow the host without recreating transcript nodes`, await evaluate(`(() => {const target=document.querySelector("#viewer"), probe=document.createElement("span"); probe.style.background=${JSON.stringify(background)}; document.body.append(probe);const match=getComputedStyle(target).backgroundColor===getComputedStyle(probe).backgroundColor;probe.remove();return match && document.querySelector(".message")===window.retainedMessage;})()`));
+  }
+  await evaluate('document.querySelector("#theme-toggle").click()');
+  check("explicit light theme overrides the VS Code host palette", await evaluate('document.documentElement.dataset.theme === "light" && getComputedStyle(document.querySelector("#viewer")).backgroundColor === "rgb(255, 255, 255)"'));
+  await evaluate('delete document.documentElement.dataset.theme; updateThemeButton()');
   check("VS Code asks adapters for English generated tool labels", lastReadOptions.locale === "en");
+  check("Export PDF sits in the page header beside existing buttons and enables after reading", await evaluate('document.querySelector("#export-pdf").parentElement.className === "header-actions" && document.querySelector("#export-pdf").textContent === "Export PDF" && !document.querySelector("#export-pdf").disabled'));
+  blockPdf = true;
+  await evaluate('document.querySelector(".message-tool").open = true; document.querySelector("#export-pdf").click()');
+  await wait('document.querySelector("#export-pdf").textContent === "Exporting…" && document.querySelector("#export-pdf").disabled');
+  check("PDF export displays English progress and disables duplicate clicks", await evaluate('document.querySelector("#notice").textContent === "Exporting conversation as PDF…"'));
+  const progressDeadline = Date.now() + 5000;
+  while (!finishPdfProgress && Date.now() < progressDeadline) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(finishPdfProgress);
+  finishPdfProgress(); blockPdf = false;
+  await wait('document.querySelector("#notice").textContent.startsWith("PDF exported: ") && !document.querySelector("#export-pdf").disabled');
+  const exportedPdf = fs.readdirSync(pdfWorkspace).filter(file => file.endsWith(".pdf"));
+  check("Export PDF creates a real file without changing expanded tools in the live reader",
+    exportedPdf.length === 1 && fs.readFileSync(path.join(pdfWorkspace, exportedPdf[0])).subarray(0, 5).toString() === "%PDF-" &&
+    await evaluate('document.querySelector(".message-tool").open'));
+  pdfFails = true;
+  await evaluate('document.querySelector("#export-pdf").click()');
+  await wait('document.querySelector("#notice").textContent === "PDF export failed: Synthetic PDF export failure" && !document.querySelector("#export-pdf").disabled');
+  pdfFails = false;
+  vscode.workspace.workspaceFolders = [];
+  await evaluate('document.querySelector("#export-pdf").click()');
+  await wait('document.querySelector("#notice").textContent === "PDF export cancelled."');
+  check("PDF failures and cancelled destination selection are English and leave no partial exports", fs.readdirSync(pdfWorkspace).filter(file => file.endsWith(".pdf")).length === 1);
+  vscode.workspace.workspaceFolders = [{ uri: new Uri(pdfWorkspace) }];
   check("all rendered framework text, hidden controls, aria labels, titles and placeholders are English", (await generatedChinese()).length === 0);
   check("English metadata, tool groups and outline are rendered", await evaluate('document.querySelector(".session-info").textContent.includes("Not provided by the source: tool calls, tool results, reasoning.") && document.querySelector(".message-tool summary").textContent.includes("1 calls · 1 outputs") && document.querySelector("#outline-status").textContent.includes("2 questions") && document.querySelector(".outline-text").textContent === "First question"'));
   check("math and image failures are English, escaped, and do not fetch images", await evaluate('document.querySelector(".math-error").textContent.startsWith("Unable to render math: ") && document.querySelector(".image-placeholder").textContent === "[Image: Sample image]" && document.querySelectorAll(".katex").length > 0 && !document.querySelector("#viewer script, #viewer img") && !document.querySelector("#viewer").textContent.includes("supersecret")'));
@@ -196,6 +269,7 @@ try {
   check("resume, clipboard and refresh failures are visible and English", (await generatedChinese()).length === 0);
   missingSession = true;
   await evaluate('openSession("pi:synthetic")');
+  check("PDF export is disabled while the session cannot be read", await evaluate('document.querySelector("#export-pdf").disabled'));
   check("read failure and unavailable outline are English", await evaluate('document.querySelector("#viewer").textContent.startsWith("Read failed: The source session") && document.querySelector("#outline-status").textContent === "Read failed; outline unavailable"'));
   missingSession = false;
   await evaluate('openSession("pi:synthetic")');

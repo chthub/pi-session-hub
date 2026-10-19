@@ -23,7 +23,7 @@
 - **Restore the Pi configuration environment**: user-configured profile directories are matched against saved system Context paths; missing or conflicting evidence prompts for a choice instead of silently inheriting another account.
 - **Follow your questions**: the shared reader's user-message outline supports search, click-to-jump, previous/next navigation and scroll tracking.
 - **Inspect agent activity**: consecutive tool calls/results share one compact foldout with tool names, arguments, commands and source call IDs.
-- **Stay local and read-only while browsing**: Hub stores its index under `~/.pi/agent/pi-session-hub/`; VS Code stars use extension-owned storage. It never uploads history. The standalone Web host uses authenticated loopback HTTP; VS Code uses UID-validated `postMessage`. Explicit Resume starts the native agent, which then maintains its own session normally.
+- **Stay local and read-only while browsing**: Explicit **Export PDF** saves a new file to the workspace; it never changes source transcripts. Hub stores its index under `~/.pi/agent/pi-session-hub/`; VS Code stars use extension-owned storage. It never uploads history. The standalone Web host uses authenticated loopback HTTP; VS Code uses UID-validated `postMessage`. Explicit Resume starts the native agent, which then maintains its own session normally.
 
 ## Pi terminal preview
 
@@ -170,13 +170,17 @@ npm run package --prefix vscode-extension
 
 All extension-generated UI is English, including the reader, navigation, confirmations and tool labels; original titles, transcript content and user-configured profile labels are preserved. The standalone HTTP viewer keeps its Chinese defaults.
 
-Click the **magnifier left of +** to reveal the compact search panel; it starts collapsed. Search defaults to **User prompts**, with **User + assistant** and **All content, including tools** scopes. Clicking the magnifier again or the panel's close button clears the filter and hides the panel. Search uses bounded, role-separated local excerpts, not lossless transcripts; titles and metadata do not count as user prompts. Matching groups expand automatically, with project grouping, star pinning and pagination preserved. While open, the query survives Webview recreation and index refresh. Enter searches immediately; Escape clears the query. Pi and standalone Web search defaults are unchanged.
+Click the **magnifier left of +** to reveal the compact search panel; it starts collapsed. A row of harness icons above the input immediately filters both the list and subsequent searches; **All harnesses** restores every source. The selected icon is highlighted, labeled on hover and keyboard accessible. Search defaults to **User prompts**, with **User + assistant** and **All content, including tools** scopes. Clicking the magnifier again or the panel's close button clears the filter and hides the panel. Search uses bounded, role-separated local excerpts, not lossless transcripts; titles and metadata do not count as user prompts. Matching groups expand automatically, with project grouping, star pinning and pagination preserved. While open, the query and harness selection survive Webview recreation and index refresh. Enter searches immediately; Escape clears the query. Pi and standalone Web search defaults are unchanged.
 
 Click anywhere on a session card, including second-row whitespace, to open it; the star remains an independent action. Relative timestamps stop at **3 days ago**; older records show a local **YYYY-MM-DD** date.
 
 Session tab labels limit the prompt/title to 20 Unicode characters, using `…` for long titles. Sidebar tooltips and the transcript retain the full title, and no editor tab-sizing settings are changed.
 
-No localhost server, browser or port forwarding is used by this host. VS Code
+The reader header includes **Export PDF**. It saves the recovered conversation, Markdown, math and collapsed tool-activity summaries into the current workspace root without changing source history. Multi-root workspaces ask for a folder; with no workspace, a folder picker is shown. Filenames are unique and existing files are never overwritten. Over Remote SSH, the file is saved on the remote host. Export needs Chrome, Chromium or Edge on that host (detected automatically, or set `CHROME_BIN`); only export launches a managed local headless browser, with no uploaded content or HTTP server. Temporary files are cleaned on success or failure. Consecutive tool records show only call/output counts and message ranges; arguments, call IDs, commands and output bodies are omitted even if expanded in the reader. Existing recovery limits and redaction still apply.
+
+The reader initially matches the VS Code editor palette (not the OS theme), paints the host background before shared styles load, and retains its page while switching tabs. Manual reader theme overrides still work. Native Webview reveal behavior needs live VS Code verification.
+
+No localhost server, browser window or port forwarding is used for reading. VS Code
 1.99+ and a workspace extension-host runtime with Node 22.5+ / `node:sqlite`
 are required; agent CLIs must be available in the remote PATH. Untrusted and
 virtual workspaces are not supported. The standalone browser mode and Pi
@@ -274,6 +278,7 @@ The viewer supports:
   fields, followed by its output in recorded order. Call IDs are shown when the
   source provides them. Missing arguments are labelled rather than inferred.
   Parameters and commands are read-only text, never executable UI actions.
+- **Export PDF** in the header saves the recovered conversation as a paginated PDF in the directory where the standalone viewer was started. It runs a local headless Chrome/Chromium/Edge (or `CHROME_BIN`), with offline Markdown/math rendering, collapsed tool-activity summaries and redaction; tool arguments, commands and output bodies are not printed. It does not download to the client browser; for a remote server, the path shown is remote. Export is an explicit file write, not a source-history modification.
 - Raw text (without losing your reading position or closing expanded tool groups),
   jump-to-start/end and an explicit index refresh.
 - Web-only reconstruction of tool activity across all six adapters; default
@@ -380,9 +385,9 @@ It is a ceiling, not a target: a short session costs far less. For a zero-token 
 
 ## The two rules
 
-### Nothing outside the index is written
+### Source history is never modified while browsing or exporting
 
-The only writable path is `~/.pi/agent/pi-session-hub/`. Every harness store is opened read-only, including the SQLite databases. The acceptance suite fingerprints every external store before and after a full scan and fails if anything changed.
+Index writes stay under `~/.pi/agent/pi-session-hub/`; VS Code stars use extension-owned storage. Explicit **Export PDF** writes a new PDF into the host-selected workspace directory and uses private temporary browser files, which are removed afterward. Every harness store is opened read-only, including the SQLite databases. The acceptance suite fingerprints every external store before and after a full scan and fails if anything changed.
 
 ### External sessions are never disguised as Pi sessions
 
@@ -468,14 +473,15 @@ Verified against the running binary rather than assumed:
 node test/scan.mjs         # isolated incremental-scan regression tests
 node test/smoke.mjs        # exercise every adapter against real stores
 npm test                  # synthetic acceptance + scan/service/workspace/Pi-environment/Pi-host suites
-npm run test:vscode       # extension compile/build + mocked-host/protocol checks
+npm run test:vscode       # compile/build + host/protocol/PDF export; requires a local browser
 npm run test:real         # opt-in legacy acceptance against real stores
-npm run test:web          # synthetic-home HTTP, security, math and CLI tests
+npm run test:web          # synthetic HTTP/security/math/PDF/CLI checks; requires a local browser
 npm run test:web:browser  # optional real browser checks; requires Chrome or CHROME_BIN
+npm run test:pdf          # PDF rendering/safety/persistence; requires Chrome or CHROME_BIN
 ```
 
 The Web tests use temporary, synthetic homes and fake credential values; they do
-not require or publish real transcripts. Browser tests use Chrome's debugging
+not require or publish real transcripts. PDF export checks need Chrome, Chromium or Edge installed on the test host (or `CHROME_BIN`). The real-renderer `test:pdf` fixture defaults to `/usr/bin/google-chrome`; set `CHROME_BIN` explicitly on other platforms or when using Chromium/Edge. The browser suites also accept `CHROME_BIN`. Browser tests use Chrome's debugging
 protocol, including a different-port forwarding fixture. Screenshots are optional:
 set `WEB_SCREENSHOT`, `WEB_SCREENSHOT_AGENT` or `WEB_SCREENSHOT_MOBILE` to an output
 path outside the repository. Never commit real-session captures or debug logs.

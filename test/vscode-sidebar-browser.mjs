@@ -74,17 +74,18 @@ try {
       return {uid:'pi:row-'+i, title:i === 0 ? '修复会话索引与大文件读取 <img src=x onerror="window.injected=true"> 中文标题与超长标识符_identifier_'.repeat(4) : '第'+i+'条会话：检查实现并解释结果', harness, harnessLabel:labels[i%labels.length], recency:'3 minutes ago', starred:false,
         icons:{light:${JSON.stringify(origin)}+'/harness/light/'+harness+'.svg',dark:${JSON.stringify(origin)}+'/harness/dark/'+harness+'.svg'}};
     });
-    let limit = 100, searchQuery = {text:'', searchScope:'user'}, searchOpen=sessionStorage.getItem('host-search-open')==='true';
+    let limit = 100, searchQuery = {text:'', searchScope:'user', harness:''}, searchOpen=sessionStorage.getItem('host-search-open')==='true';
     const send = data => window.dispatchEvent(new MessageEvent('message',{data}));
     function publish() {
-      const matches=rows.filter((row,i)=>!searchQuery.text || searchQuery.text==='allrows' ||
+      const matches=rows.filter((row,i)=>(!searchQuery.harness || row.harness===searchQuery.harness) &&
+        (!searchQuery.text || searchQuery.text==='allrows' ||
         searchQuery.text==='userneedle'&&i===0 || searchQuery.text==='assistantneedle'&&searchQuery.searchScope!=='user'&&i===1 ||
-        searchQuery.text==='toolneedle'&&searchQuery.searchScope==='all'&&i===2);
+        searchQuery.text==='toolneedle'&&searchQuery.searchScope==='all'&&i===2));
       const ordered=matches.filter(row=>row.starred).concat(matches.filter(row=>!row.starred));
       send({type:'sessionHub.sidebar.state',search:{...searchQuery},searchOpen,density:window.sidebarDensity,status:'',groups:[{scope:'current',label:'Current Project',total:matches.length,sessions:ordered.slice(0,limit)},{scope:'unscoped',label:'Unassigned',total:0,sessions:[]},{scope:'other',label:'Other Projects',total:0,sessions:[]}]});
     }
     window.sidebarDensity='comfortable'; window.publishSidebar=()=>publish();
-    window.toggleSidebarSearch=()=>{searchOpen=!searchOpen;sessionStorage.setItem('host-search-open',String(searchOpen));if(!searchOpen){searchQuery.text='';limit=100;}publish();};
+    window.toggleSidebarSearch=()=>{searchOpen=!searchOpen;sessionStorage.setItem('host-search-open',String(searchOpen));if(!searchOpen){searchQuery.text='';searchQuery.harness='';limit=100;}publish();};
     window.acquireVsCodeApi = () => ({getState:()=>window.savedState,setState:value=>{window.savedState=structuredClone(value);sessionStorage.setItem('sidebar-state',JSON.stringify(value));},postMessage:request=>{
       window.requests.push(request);
       setTimeout(()=>{
@@ -92,8 +93,8 @@ try {
         if(request.action === 'star') { if(window.failNextStar){window.failNextStar=false;error='Simulated save failure';}else{rows.find(row=>row.uid===request.uid).starred=request.starred;publish();} }
         if(request.action === 'more'){limit+=100;publish();}
         if(request.action === 'ready') publish();
-        if(request.action === 'closeSearch'){searchOpen=false;searchQuery.text='';limit=100;sessionStorage.setItem('host-search-open','false');publish();}
-        if(request.action === 'search') {searchQuery={text:request.text,searchScope:request.searchScope};limit=100;publish();}
+        if(request.action === 'closeSearch'){searchOpen=false;searchQuery.text='';searchQuery.harness='';limit=100;sessionStorage.setItem('host-search-open','false');publish();}
+        if(request.action === 'search') {searchQuery={text:request.text,searchScope:request.searchScope,harness:request.harness||''};limit=100;publish();}
         send({type:'sessionHub.sidebar.result',id:request.id,error});
       },10);
     }});
@@ -279,6 +280,27 @@ try {
   await evaluate(`window.toggleSidebarSearch()`);
   check("native magnifier expands search and moves keyboard focus into its field", await evaluate(`!document.querySelector('#search-panel').hidden && document.activeElement.id==='search' && document.querySelector('#search-panel').textContent.includes('Search sessions')`));
   check("search defaults to user prompts with three explicitly labeled scopes", await evaluate(`document.querySelector('#search-scope').value==='user' && document.querySelectorAll('#search-scope option').length===3`));
+  check("seven harness buttons sit above search, with All selected and accessible names",
+    await evaluate(`(() => {const buttons=Array.from(document.querySelectorAll('#search-harness button'));return buttons.length===7 && buttons.every(b=>b.title && b.getAttribute('aria-label')) && buttons.filter(b=>b.getAttribute('aria-pressed')==='true').length===1 && buttons[0].dataset.harness==='' && buttons[0].getAttribute('aria-pressed')==='true' && document.querySelector('#search-harness').getBoundingClientRect().bottom<=document.querySelector('#search').getBoundingClientRect().top;})()`));
+  const selectHarness = async harness => {
+    await evaluate(`document.querySelector('#search-harness [data-harness="${harness}"]').click()`);
+    await wait(`window.requests.at(-1)?.action==='search' && window.requests.at(-1).harness===${JSON.stringify(harness)} && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
+  };
+  for (const [index, harness] of ['pi','claude-code','codex','opencode','crush','jcode'].entries()) {
+    await selectHarness(harness);
+    check(`${harness} icon immediately filters without a keyword and persists selection`, await evaluate(`(() => {
+      const cards=Array.from(document.querySelectorAll('.session-card')), selected=document.querySelector('#search-harness [aria-pressed=true]');
+      return cards.length===${Math.ceil((205-index)/6)} && cards.every(card=>card.querySelector('.harness-icon-slot').dataset.harness===${JSON.stringify(harness)}) &&
+        selected.dataset.harness===${JSON.stringify(harness)} && window.savedState.harness===${JSON.stringify(harness)} && window.requests.at(-1).text==='' && Array.from(document.querySelectorAll('.group')).every(g=>g.open);
+    })()`));
+  }
+  await evaluate(`document.querySelector('#search-harness [data-harness="codex"]').focus()`);
+  await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
+  await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
+  await wait(`document.querySelector('#search-harness [data-harness="codex"]').getAttribute('aria-pressed')==='true' && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
+  check("harness icons support keyboard selection", true);
+  await selectHarness('');
+  check("All restores the first page of cross-harness sessions", await evaluate(`document.querySelectorAll('.session-card').length===100 && new Set(Array.from(document.querySelectorAll('.harness-icon-slot'),n=>n.dataset.harness)).size===6`));
   const searchFor = async (text, scope = "user") => {
     await evaluate(`document.querySelector('#search-scope').value=${JSON.stringify(scope)};document.querySelector('#search').focus();document.querySelector('#search').value=${JSON.stringify(text)};document.querySelector('#search').dispatchEvent(new Event('input'));`);
     await wait(`window.requests.at(-1)?.action==='search' && window.requests.at(-1).text===${JSON.stringify(text)} && window.requests.at(-1).searchScope===${JSON.stringify(scope)} && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
@@ -294,6 +316,11 @@ try {
   await evaluate(`document.querySelector('#search').value='userneedle';document.querySelector('#search').dispatchEvent(new CompositionEvent('compositionend'))`);
   await wait(`document.querySelector('.session-card')?.dataset.uid==='pi:row-0' && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
   check("committed IME text triggers the prompt-only search", await evaluate(`window.requests.at(-1).text==='userneedle' && window.requests.at(-1).searchScope==='user'`));
+  await selectHarness('codex');
+  check("a keyword matching another harness is excluded", await evaluate(`!document.querySelector('.session-card') && window.requests.at(-1).text==='userneedle'`));
+  await selectHarness('pi');
+  check("changing harness reruns the same keyword immediately", await evaluate(`document.querySelector('.session-card').dataset.uid==='pi:row-0' && window.requests.at(-1).text==='userneedle'`));
+  await selectHarness('');
   await searchFor('assistantneedle');
   check("default prompt-only query has an actionable empty state", await evaluate(`!document.querySelector('.session-card') && document.querySelector('#search-summary').textContent.includes('wider scope')`));
   await evaluate(`document.querySelector('#search-scope').value='conversation';document.querySelector('#search-scope').dispatchEvent(new Event('change'))`);
@@ -303,11 +330,15 @@ try {
   check("conversation scope excludes tool-only content", await evaluate(`!document.querySelector('.session-card')`));
   await searchFor('toolneedle', 'all');
   check("all-content scope returns tool matches and persists controls", await evaluate(`document.querySelector('.session-card').dataset.uid==='pi:row-2' && window.savedState.text==='toolneedle' && window.savedState.searchScope==='all'`));
-  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'sessionHub.sidebar.state',search:{text:'outdated',searchScope:'user'},groups:[],status:''}}))`);
-  check("stale host search responses cannot replace the current result", await evaluate(`document.querySelector('.session-card').dataset.uid==='pi:row-2'`));
+  await selectHarness('claude-code');
+  check("all-content searches still exclude other harnesses", await evaluate(`!document.querySelector('.session-card')`));
+  await selectHarness('codex');
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'sessionHub.sidebar.state',search:{text:'toolneedle',searchScope:'all',harness:'pi'},groups:[],status:''}}))`);
+  check("stale results for a different harness cannot replace the current result", await evaluate(`document.querySelector('.session-card').dataset.uid==='pi:row-2'`));
   await cdp("Page.reload");
   await wait(`document.querySelector('.session-card')?.dataset.uid==='pi:row-2' && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
-  check("webview recreation restores the query and range, then searches again", await evaluate(`document.querySelector('#search').value==='toolneedle' && document.querySelector('#search-scope').value==='all' && window.requests.some(r=>r.action==='search'&&r.text==='toolneedle'&&r.searchScope==='all')`));
+  check("webview recreation restores the query, scope and selected harness", await evaluate(`document.querySelector('#search').value==='toolneedle' && document.querySelector('#search-scope').value==='all' && document.querySelector('#search-harness [aria-pressed=true]').dataset.harness==='codex' && window.requests.some(r=>r.action==='search'&&r.text==='toolneedle'&&r.searchScope==='all'&&r.harness==='codex')`));
+  await selectHarness('');
   await searchFor('allrows', 'all');
   await evaluate(`document.querySelector('.more').click()`);
   await wait(`document.querySelectorAll('.session-card').length===200`);
@@ -319,22 +350,26 @@ try {
   check("Escape clears the query without changing the scope or saved group collapse state", await evaluate(`document.querySelector('#search').value==='' && document.querySelector('#search-scope').value==='user' && document.activeElement.id==='search' && !document.querySelector('[data-scope=other]').open`));
   for (const width of [220, 320, 480]) {
     await cdp("Emulation.setDeviceMetricsOverride", { width, height: 700, deviceScaleFactor: 1, mobile: false });
-    check(`${width}px search controls fit the sidebar`, await evaluate(`document.documentElement.scrollWidth<=innerWidth && document.querySelector('#search-scope').getBoundingClientRect().right<=innerWidth`));
+    check(`${width}px search controls and harness icons fit in a single row`, await evaluate(`(() => {const buttons=Array.from(document.querySelectorAll('#search-harness button')), rects=buttons.map(b=>b.getBoundingClientRect());return document.documentElement.scrollWidth<=innerWidth && document.querySelector('#search-scope').getBoundingClientRect().right<=innerWidth && rects.every(r=>r.top===rects[0].top && r.width>=20 && r.right<=innerWidth) && buttons.every(b=>Array.from(b.querySelectorAll('img')).every(img=>img.complete && img.naturalWidth>0));})()`));
   }
   await searchFor('toolneedle','all');
+  await selectHarness('codex');
   await evaluate(`document.querySelector('#search-close').click()`);
   await wait(`document.querySelector('#search-panel').hidden && document.querySelectorAll('.session-card').length===100`);
-  check("closing search clears hidden filters and restores the full list", await evaluate(`window.requests.at(-1).action==='closeSearch' && document.querySelector('#search').value===''`));
+  check("closing search clears hidden keyword/harness filters and restores the full list", await evaluate(`window.requests.at(-1).action==='closeSearch' && document.querySelector('#search').value==='' && window.savedState.harness==='' && document.querySelector('#search-harness [aria-pressed=true]').dataset.harness===''`));
   await evaluate(`window.toggleSidebarSearch()`);
   await searchFor('userneedle');
+  await selectHarness('pi');
   await evaluate(`window.toggleSidebarSearch()`);
   await wait(`document.querySelector('#search-panel').hidden && document.querySelectorAll('.session-card').length===100`);
-  check("clicking the magnifier again collapses and clears search", true);
+  check("clicking the magnifier again collapses and clears search plus the harness", await evaluate(`window.savedState.harness===''`));
   await evaluate(`window.toggleSidebarSearch()`);
   for (const theme of ['vscode-light','vscode-dark','vscode-high-contrast','vscode-high-contrast-light']) {
     await evaluate(`document.body.className=${JSON.stringify(theme)}`);
-    check(`${theme} search panel uses visible inputs and no horizontal overflow`, await evaluate(`document.querySelector('#search').getBoundingClientRect().height>=30 && document.documentElement.scrollWidth<=innerWidth && getComputedStyle(document.querySelector('#search')).backgroundColor!=='rgba(0, 0, 0, 0)'`));
+    await selectHarness("pi");
+    check(`${theme} search panel and selected harness icon remain visible`, await evaluate(`(() => {const selected=document.querySelector('#search-harness [aria-pressed=true]'), style=getComputedStyle(selected), icon=Array.from(selected.querySelectorAll('img')).filter(img=>getComputedStyle(img).display!=='none');return document.querySelector('#search').getBoundingClientRect().height>=30 && document.documentElement.scrollWidth<=innerWidth && getComputedStyle(document.querySelector('#search')).backgroundColor!=='rgba(0, 0, 0, 0)' && style.borderTopStyle==='solid' && style.borderTopColor!=='rgba(0, 0, 0, 0)' && icon.length===1 && icon[0].getBoundingClientRect().width===16;})()`));
   }
+  await selectHarness("");
   await evaluate(`document.querySelector('.star-button').click()`);
   await wait(`document.querySelector('.session-card').classList.contains('is-starred') && !document.querySelector('.star-button').disabled`);
   if (process.env.SIDEBAR_SCREENSHOT || process.env.SIDEBAR_HTML) {

@@ -10,6 +10,15 @@
 <body data-vscode-context='{"preventDefaultContextMenuItems":true}'>
   <section id="search-panel" class="search-controls" aria-label="Search sessions" hidden>
     <div class="search-heading"><span>Search sessions</span><button id="search-close" class="icon-button" type="button" title="Close search and clear results" aria-label="Close search">×</button></div>
+    <div id="search-harness" class="harness-filters" role="group" aria-label="Filter by harness">
+      <button type="button" data-harness="" title="All harnesses" aria-label="All harnesses" aria-pressed="true"><svg class="filter-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><rect x="2" y="2" width="4" height="4" rx=".5"></rect><rect x="10" y="2" width="4" height="4" rx=".5"></rect><rect x="2" y="10" width="4" height="4" rx=".5"></rect><rect x="10" y="10" width="4" height="4" rx=".5"></rect></svg></button>
+      <button type="button" data-harness="pi" title="Pi" aria-label="Filter sessions: Pi" aria-pressed="false"><img class="filter-icon icon-light" src="harness/light/pi.svg" alt=""><img class="filter-icon icon-dark" src="harness/dark/pi.svg" alt=""></button>
+      <button type="button" data-harness="claude-code" title="Claude Code" aria-label="Filter sessions: Claude Code" aria-pressed="false"><img class="filter-icon icon-light" src="harness/light/claude-code.svg" alt=""><img class="filter-icon icon-dark" src="harness/dark/claude-code.svg" alt=""></button>
+      <button type="button" data-harness="codex" title="Codex" aria-label="Filter sessions: Codex" aria-pressed="false"><img class="filter-icon icon-light" src="harness/light/codex.svg" alt=""><img class="filter-icon icon-dark" src="harness/dark/codex.svg" alt=""></button>
+      <button type="button" data-harness="opencode" title="OpenCode" aria-label="Filter sessions: OpenCode" aria-pressed="false"><img class="filter-icon icon-light" src="harness/light/opencode.svg" alt=""><img class="filter-icon icon-dark" src="harness/dark/opencode.svg" alt=""></button>
+      <button type="button" data-harness="crush" title="Crush" aria-label="Filter sessions: Crush" aria-pressed="false"><img class="filter-icon icon-light" src="harness/light/crush.svg" alt=""><img class="filter-icon icon-dark" src="harness/dark/crush.svg" alt=""></button>
+      <button type="button" data-harness="jcode" title="JCode" aria-label="Filter sessions: JCode" aria-pressed="false"><img class="filter-icon icon-light" src="harness/light/jcode.svg" alt=""><img class="filter-icon icon-dark" src="harness/dark/jcode.svg" alt=""></button>
+    </div>
     <div class="search-field">
       <svg class="search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="6.7" cy="6.7" r="4.2"></circle><path d="m9.9 9.9 3.6 3.6"></path></svg>
       <label class="sr-only" for="search">Search sessions</label>

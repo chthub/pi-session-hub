@@ -38,7 +38,9 @@ try {
   const jcode = JSON.parse(fs.readFileSync(jcodeFile, "utf8"));
   for (const message of jcode.messages) if (message.role === "user") message.role = "assistant";
   fs.writeFileSync(jcodeFile, JSON.stringify(jcode));
-  viewer = await startWebViewer({ home, port: 0 });
+  const pdfWorkspace = path.join(temp, "workspace");
+  fs.mkdirSync(pdfWorkspace);
+  viewer = await startWebViewer({ home, port: 0, workspaceDir: pdfWorkspace });
   forward = await forwardLoopback(viewer.url);
   check("external browser tunnel remaps the local port", new URL(forward.url).port !== new URL(viewer.url).port);
   chrome = spawn(process.env.CHROME_BIN ?? "google-chrome", [
@@ -101,6 +103,7 @@ try {
   await cdp("Page.navigate", { url: forward.url });
   await wait('document.querySelectorAll(".session").length === 6');
   check("browser loads six sessions", true);
+  check("Export PDF is English and disabled until a conversation is loaded", await evaluate('document.querySelector("#export-pdf").textContent === "Export PDF" && document.querySelector("#export-pdf").disabled'));
   check("connection status is inside compact header", await evaluate('document.querySelector("#notice").closest(".app-header") !== null && document.querySelector(".app-header").getBoundingClientRect().height <= 52'));
   check("workspace starts immediately below header", await evaluate('Math.abs(document.querySelector(".workspace").getBoundingClientRect().top - document.querySelector(".app-header").getBoundingClientRect().bottom) < 1'));
   check("long status remains readable via full tooltip without enlarging header", await evaluate('(() => { const original = document.querySelector("#notice").textContent; notice("部分来源读取失败：" + "很长的诊断信息".repeat(100), true); const status = document.querySelector("#notice"); const ok = status.title === status.textContent && document.querySelector(".app-header").getBoundingClientRect().height <= 52 && document.documentElement.scrollWidth <= innerWidth; notice(original); return ok; })()'));
@@ -108,6 +111,12 @@ try {
   await evaluate('Array.from(document.querySelectorAll(".session")).find(b => b.querySelector(".harness-badge").textContent === "Pi").click()');
   await wait('document.querySelectorAll(".katex-display").length > 0');
   await evaluate("document.fonts.ready.then(() => true)");
+  const sourceBeforePdf = fs.readFileSync(piFile);
+  await evaluate('document.querySelector("#export-pdf").click()');
+  await wait('document.querySelector("#notice").textContent.startsWith("PDF exported: ") && !document.querySelector("#export-pdf").disabled');
+  const pdfFiles = fs.readdirSync(pdfWorkspace).filter(file => file.endsWith(".pdf"));
+  check("standalone Export PDF button writes into the host workspace without touching source history",
+    pdfFiles.length === 1 && fs.readFileSync(path.join(pdfWorkspace, pdfFiles[0])).subarray(0, 5).toString() === "%PDF-" && fs.readFileSync(piFile).equals(sourceBeforePdf));
   check("browser renders inline and multiline math", await evaluate('document.querySelectorAll(".katex").length >= 2 && document.querySelector(".katex-display").getBoundingClientRect().height > 20'));
   check("opening a session does not auto-focus or outline the reading pane", await evaluate('document.activeElement !== document.querySelector("#viewer") && getComputedStyle(document.querySelector("#viewer")).outlineStyle === "none"'));
   check("code remains literal", await evaluate('document.querySelector("code.language-tex").textContent.includes("$x$ and $$y$$")'));

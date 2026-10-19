@@ -23,6 +23,28 @@
   --code: #141c25; --error: #ffaaa4; --user-bg: #1d302f;
   --hover: #25303b; --shadow: #00000020; --on-accent: #142925;
 }
+/* A retained VS Code webview should match the editor canvas when revealed,
+   not choose a potentially different palette from the operating-system theme.
+   A manual reader theme still takes precedence. */
+html:not([data-theme]) body[data-host="vscode"] {
+  --bg: var(--vscode-editor-background, #ffffff);
+  --panel: var(--vscode-editor-background, #ffffff);
+  --text: var(--vscode-editor-foreground, #202d3a);
+  --muted: var(--vscode-descriptionForeground, #6c7d8e);
+  --border: var(--vscode-panel-border, #e1e8ee);
+  --accent: var(--vscode-textLink-foreground, #287b76);
+  --selected: var(--vscode-list-inactiveSelectionBackground, #eaf5f3);
+  --code: var(--vscode-textCodeBlock-background, #f3f6f8);
+  --error: var(--vscode-errorForeground, #ae3b38);
+  --user-bg: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  --hover: var(--vscode-list-hoverBackground, #f5f8fa);
+  --shadow: var(--vscode-widget-shadow, #2034440d);
+  --on-accent: var(--vscode-button-foreground, #ffffff);
+}
+html:not([data-theme]) body[data-host="vscode"].vscode-dark,
+html:not([data-theme]) body[data-host="vscode"].vscode-high-contrast { color-scheme: dark; }
+html:not([data-theme]) body[data-host="vscode"].vscode-light,
+html:not([data-theme]) body[data-host="vscode"].vscode-high-contrast-light { color-scheme: light; }
 * { box-sizing: border-box; }
 /* VS Code owns the session list. Keep only conversation + outline in panels. */
 body[data-host="vscode"] .workspace { grid-template-columns: minmax(0, 1fr) 252px; }
@@ -176,4 +198,5 @@ blockquote { border-left: 3px solid var(--border); margin-left: 0; padding-left:
   .outline-footer { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 12px; }
   .outline-step { margin: 0; } .outline-step button { padding: 3px 8px; white-space: nowrap; }
 }
+@media (max-width: 480px) { .brand h1 { display: none; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }

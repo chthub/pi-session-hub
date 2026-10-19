@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { createHash } from "node:crypto";
 import type { SessionHubService } from "../../src/core/service.ts";
-import { HARNESS_LABEL, type ExternalSession, type SearchScope } from "../../src/types.ts";
+import { HARNESS_LABEL, type ExternalSession, type HarnessId, type SearchScope } from "../../src/types.ts";
 import { redact } from "../../src/security.ts";
 import { sessionProjectScope, type ProjectScope } from "./projectScope.ts";
 import type { SessionStars } from "./sessionStars.ts";
@@ -45,10 +45,10 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
   private decorationUids = new Map<string, string>();
   private sessions: ExternalSession[] = [];
   private searchVersion = 0;
-  private requestedSearch = { text: "", searchScope: "user" as SearchScope };
+  private requestedSearch = { text: "", searchScope: "user" as SearchScope, harness: "" as HarnessId | "" };
   private appliedSearch = this.requestedSearch;
   private matches?: Set<string>;
-  get sidebarSearch(): Readonly<{ text: string; searchScope: SearchScope }> { return this.appliedSearch; }
+  get sidebarSearch(): Readonly<{ text: string; searchScope: SearchScope; harness: HarnessId | "" }> { return this.appliedSearch; }
   constructor(private readonly service: SessionHubService, private readonly roots: () => string[],
     private readonly extensionUri: vscode.Uri, private readonly stars: SessionStars) {}
 
@@ -64,19 +64,19 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
     this.sessions = sessions;
     this.decorationUids = new Map(sessions.map(session => [sessionResource(session.uid).toString(), session.uid]));
     this.decorationsChanged.fire(undefined);
-    await this.setSearch(this.requestedSearch.text, this.requestedSearch.searchScope);
+    await this.setSearch(this.requestedSearch.text, this.requestedSearch.searchScope, this.requestedSearch.harness);
   }
   /** Query every index page before grouping/pinning/slicing sidebar results.
    * Newer requests always win, including searches racing an index refresh. */
-  async setSearch(text: string, searchScope: SearchScope = "user"): Promise<void> {
+  async setSearch(text: string, searchScope: SearchScope = "user", harness: HarnessId | "" = ""): Promise<void> {
     const version = ++this.searchVersion;
-    const query = { text: text.trim(), searchScope };
+    const query = { text: text.trim(), searchScope, harness };
     this.requestedSearch = query;
     let matches: Set<string> | undefined;
     if (query.text) {
       matches = new Set();
       for (let offset = 0; ; offset += 500) {
-        const page = await this.service.listSessions({ ...query, limit: 500, offset });
+        const page = await this.service.listSessions({ ...query, harness: query.harness || undefined, limit: 500, offset });
         if (version !== this.searchVersion) return;
         for (const session of page) matches.add(session.uid);
         if (page.length < 500) break;
@@ -113,6 +113,7 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
     const buckets: Record<ProjectScope, ExternalSession[]> = { current: [], unscoped: [], other: [] };
     // Pin before slicing pages so even old stars appear on the first page.
     for (const session of this.orderedSessions()) {
+      if (this.appliedSearch.harness && session.harness !== this.appliedSearch.harness) continue;
       if (!this.matches || this.matches.has(session.uid)) buckets[sessionProjectScope(session, roots)].push(session);
     }
     return ([["current", "Current Project"], ["unscoped", "Unassigned"], ["other", "Other Projects"]] as const).map(([scope, label]) => ({

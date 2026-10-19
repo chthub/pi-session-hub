@@ -7,6 +7,7 @@ import { redact } from "../../src/security.ts";
 import { parseViewerRequest, type ViewerResponse } from "./protocol.ts";
 import { sessionTabTitle } from "./sessionTitle.ts";
 import { SessionLinks } from "./sessionLinks.ts";
+import { exportSessionPdf } from "./sessionPdf.ts";
 
 function escapeAttribute(value: string): string {
   return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
@@ -15,7 +16,9 @@ function escapeAttribute(value: string): string {
 /** Generate from the SAME template/assets as the standalone reader. */
 export function viewerHtml(template: string, uid: string, cspSource: string, nonce: string, resource: (file: string) => string): string {
   const csp = `default-src 'none'; script-src 'nonce-${nonce}'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; img-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'`;
-  return template.replace('<html lang="zh-CN">', '<html lang="en">').replace("<head>", `<head>\n  <meta http-equiv="Content-Security-Policy" content="${escapeAttribute(csp)}">`)
+  // Paint the host editor color before external styles load or the iframe is revealed.
+  const initialStyle = "html, body { background: var(--vscode-editor-background, #ffffff); color: var(--vscode-editor-foreground, #202d3a); }";
+  return template.replace('<html lang="zh-CN">', '<html lang="en">').replace("<head>", `<head>\n  <meta http-equiv="Content-Security-Policy" content="${escapeAttribute(csp)}">\n  <style id="session-hub-initial-style">${initialStyle}</style>`)
     .replace("<body>", `<body data-host="vscode" data-session-uid="${escapeAttribute(uid)}">`)
     .replace(/href="\/(katex\/katex.min.css|style.css)"/g, (_match, file: string) => `href="${escapeAttribute(resource(file))}"`)
     .replace(/<script src="\/(transport.js|app.js)" defer><\/script>/g, (_match, file: string) =>
@@ -37,7 +40,8 @@ export class SessionViewer implements vscode.Disposable {
     if (concurrent) { concurrent.reveal(); return; }
     const media = vscode.Uri.joinPath(this.extensionUri, "dist", "media");
     const panel = vscode.window.createWebviewPanel("sessionHub.viewer", sessionTabTitle(session.title, session.nativeId),
-      vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [media] });
+      // Keep reading position and expanded content when switching editor tabs.
+      vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [media] });
     this.panels.set(uid, panel);
     const disposables: vscode.Disposable[] = [];
     let links = new SessionLinks(null);
@@ -65,6 +69,12 @@ export class SessionViewer implements vscode.Disposable {
             const target = links.resolve(request.linkId!);
             await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(target.path).with({ fragment: target.fragment }));
             response.result = { ok: true };
+            break;
+          }
+          case "exportPdf": {
+            const detail = await this.service.getSession(uid, { preserveFormatting: true, includeToolActivity: true, locale: "en" });
+            if (!detail) throw new Error("The source session no longer exists or cannot be read");
+            response.result = await exportSessionPdf(detail, this.extensionUri);
             break;
           }
           case "refresh": response.result = await this.refresh(); break;

@@ -72,6 +72,7 @@ check("quoted JSON secrets are redacted in command text", !renderPlainText('{"ap
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "session-hub-web-"));
 let viewer;
+let pdfWorkspace;
 let forward;
 let child;
 function fingerprint(directory, map = {}) {
@@ -86,7 +87,8 @@ function fingerprint(directory, map = {}) {
 try {
   await buildToolHome(home);
   const before = fingerprint(home);
-  viewer = await startWebViewer({ home, port: 0 });
+  pdfWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-hub-pdf-workspace-"));
+  viewer = await startWebViewer({ home, port: 0, workspaceDir: pdfWorkspace });
   const url = new URL(viewer.url);
   const token = new URLSearchParams(url.hash.slice(1)).get("token");
   const headers = { Authorization: `Bearer ${token}` };
@@ -137,6 +139,21 @@ try {
   check("stable pagination", first.sessions.length === 2 && first.hasMore && second.sessions.every(s => !first.sessions.some(t => t.uid === s.uid)));
   const filtered = await (await request("/api/sessions?harness=pi")).json();
   check("harness filter", filtered.sessions.length === 1 && filtered.sessions[0].harness === "pi");
+  const pdfRoute = `/api/export-pdf?${new URLSearchParams({ uid: filtered.sessions[0].uid })}`;
+  check("PDF export is authenticated and requires POST",
+    (await request(pdfRoute, { method: "POST", headers: {} })).status === 401 && (await request(pdfRoute)).status === 405);
+  check("PDF export rejects destination paths, duplicate IDs, document content and missing sessions",
+    (await request(pdfRoute + "&path=/etc/passwd", { method: "POST" })).status === 400 &&
+    (await request(pdfRoute + "&uid=pi:forged", { method: "POST" })).status === 400 &&
+    (await request(pdfRoute, { method: "POST", body: "<script>bad()</script>" })).status === 400 &&
+    (await request("/api/export-pdf?uid=pi:missing", { method: "POST" })).status === 404);
+  const pdfResponse = await request(pdfRoute, { method: "POST" });
+  const pdfResult = await pdfResponse.json();
+  assert.equal(pdfResponse.status, 200, JSON.stringify(pdfResult));
+  check("HTTP Export PDF saves into the host workspace, not a client-supplied path",
+    path.dirname(pdfResult.path) === pdfWorkspace && fs.readFileSync(pdfResult.path).subarray(0, 5).toString() === "%PDF-" && pdfResult.fileName === path.basename(pdfResult.path));
+  fs.rmSync(pdfWorkspace, { recursive: true, force: true });
+  pdfWorkspace = undefined;
   const search = await (await request("/api/sessions?q=billing")).json();
   check("FTS search", search.sessions.some(s => s.harness === "pi"));
   for (const query of ["harness=bad", "limit=0", "limit=9999", "offset=-1", "offset=abc", "q=" + "x".repeat(1001)]) {
@@ -201,5 +218,6 @@ try {
   if (child && child.exitCode === null && child.signalCode === null) { const exited = once(child, "exit"); child.kill("SIGKILL"); await exited; }
   if (forward) await forward.close();
   if (viewer) await viewer.close();
+  if (pdfWorkspace) fs.rmSync(pdfWorkspace, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
 }

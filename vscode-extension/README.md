@@ -25,11 +25,15 @@ npm run package --prefix vscode-extension
 
 扩展生成的菜单、提示、阅读页工具栏、目录和工具活动标签统一使用英文；用户的会话标题、正文、工具原始内容和配置名称保留原文。独立 HTTP Web Viewer 的默认中文界面不变。
 
-侧栏标题栏从左到右为 **Search Sessions**（放大镜）、**New Session**（+）、**Refresh Index**。搜索面板默认收起，点击放大镜才展开搜索框和 **Search in** 范围选择：**User prompts**（默认）、**User + assistant**、**All content, including tools**。输入后自动搜索，切换范围立即重新检索；Enter 立即搜索，Escape 清空关键词。再次点击放大镜或面板内的 × 会收起并清空搜索，避免隐藏的条件继续过滤列表。搜索结果保留项目分组、星标和分页；匹配分组自动展开，清空后恢复原折叠状态。面板打开时，Webview 重建会恢复当前搜索；刷新索引也会沿用当前条件。
+侧栏标题栏从左到右为 **Search Sessions**（放大镜）、**New Session**（+）、**Refresh Index**。搜索面板默认收起，点击放大镜后，搜索框上方显示一排 harness 图标（Pi、Claude Code、Codex、OpenCode、Crush、JCode），点击立即只展示该 harness 的会话，搜索也仅在所选 harness 内进行；最左侧 **All harnesses** 恢复全部。图标悬停显示名称，当前选择有高亮边框，支持键盘操作。下方是搜索框和 **Search in** 范围选择：**User prompts**（默认）、**User + assistant**、**All content, including tools**。输入后自动搜索，切换范围立即重新检索；Enter 立即搜索，Escape 清空关键词。再次点击放大镜或面板内的 × 会收起并清空关键词和 harness 筛选，避免隐藏的条件继续过滤列表。搜索结果保留项目分组、星标和分页；匹配分组自动展开，清空后恢复原折叠状态。面板打开时，Webview 重建会恢复当前搜索和 harness 选择；刷新索引也会沿用当前条件。
 
 搜索基于本地、有大小上限的索引摘要，不是无损全文检索；长会话未保留的中间内容可能搜不到。「仅用户提问」不会因会话标题、项目路径、assistant 回复或嵌在用户记录中的工具输出而命中。扩大范围不会上传历史，也不会在每次输入时重新读取全部源文件。升级后首次刷新会自动重建搜索摘要，可能比平时刷新慢。
 
-无需启动 HTTP 服务、打开浏览器或转发端口。原有 Pi `/session-hub` 与独立 Web Viewer 继续可用；VS Code 是新增 host，不是替代品。
+阅读页顶栏的 **Export PDF** 将当前对话导出为 A4 PDF，包含恢复到的正文、Markdown、公式和折叠态工具活动摘要（不受页面上手动展开、原文切换或缩放影响）；连续工具记录只显示调用数、输出数和消息范围，不包含参数、命令、调用 ID 或输出详情，不修改来源记录。默认直接保存到当前工作区根目录，完成后显示文件路径；多根工作区会询问目标文件夹，没有工作区时会让你选择文件夹。文件名含会话标题、时间和随机后缀，不覆盖已有文件。Remote SSH 时 PDF 保存在远程工作区，不是本机下载目录。导出保留已有脱敏与读取上限，源记录中未恢复的内容不会凭空补全。
+
+PDF 导出需要扩展宿主所在机器安装 Chrome、Chromium 或 Edge；自动检测常见安装路径和 `PATH`，也可在启动扩展宿主前设置 `CHROME_BIN`。仅导出时启动本地 headless 浏览器，不打开窗口、不启动 HTTP 服务、不上传会话；浏览器临时文件完成或失败后删除。同一宿主一次只导出一份，导出中的按钮会暂时禁用。新增按钮、进度与错误提示均为英文。
+
+无需启动 HTTP 服务、打开浏览器或转发端口即可阅读。原有 Pi `/session-hub` 与独立 Web Viewer 继续可用；VS Code 是新增 host，不是替代品。
 
 更新同版本安装包时，可在 Remote SSH 终端执行以下命令，然后运行 `Developer: Reload Window`：
 
@@ -38,6 +42,8 @@ code --install-extension vscode-extension/pi-session-hub-vscode-0.1.0.vsix --for
 ```
 
 悬停会话或通过键盘聚焦时显示星标按钮；加星标后，彩色实心星标始终可见。再次点击取消星标。星标按钮不会打开正文或触发重新扫描，已有星标也会自动恢复。按钮支持 Tab 聚焦和空格/Enter 操作。
+
+阅读页默认底色和明暗模式跟随 VS Code 编辑器，首帧在共享样式加载前即使用宿主底色；顶部按钮仍可手动切换阅读主题。标签页隐藏后保留页面，不会因为切回而重新读取正文；关闭标签页后仍会释放。VS Code 自身的 Webview 显示切换仍需在真实窗口中验收。
 
 `sessionHub.sidebar.density` 默认是 `comfortable`：标题一行、时间一行。选择 `compact` 则使用 24px 单行布局，时间缩写为 `3m`、`2d` 等；完整时间保留在悬停提示中。设置更改即时生效。
 
@@ -116,16 +122,18 @@ npm test
 npm run test:web
 npm run test:web:browser
 npm run test:vscode
+npm run test:pdf  # 需要 Chrome / Chromium / Edge，或 CHROME_BIN
 ```
 
-VS Code 自动测试使用真实的共享 core、SQLite 和 Markdown，模拟 VS Code API 验证分组、侧栏/正文 Webview 消息、安全边界和终端选项。`npm run test:vscode:browser` 使用 Chrome 检查真实侧栏布局、星标点击/键盘操作、主题、分页和滚动位置。**它们不等于真正 Remote SSH 验收。**
+VS Code 自动测试使用真实的共享 core、SQLite 和 Markdown，模拟 VS Code API 验证分组、侧栏/正文 Webview 消息、安全边界和终端选项；其中 PDF 导出集成测试与 `npm run test:web` 也需要测试宿主安装 Chrome、Chromium 或 Edge，或配置 `CHROME_BIN`。`npm run test:vscode:browser` 使用 Chrome 检查真实侧栏布局、星标点击/键盘操作、主题、分页和滚动位置。**它们不等于真正 Remote SSH 验收。**
 
 本次 Remote SSH 工作流已完成用户手工测试。升级、变更配置或发布新版本时，仍应在真实 Remote SSH 窗口检查：
 
 - `Developer: Show Running Extensions` 中 Session Hub 位于远程工作区扩展宿主。
 - 当前项目的 Pi / Claude 历史以两行卡片显示，标题独占第一行；未识别项目的记录仍可访问，加载更多能显示较旧记录。
 - 点击第二行星标按钮后显示 `★`、整卡高亮并在所属分组置顶，不打开正文、不重新扫描；再次点击取消并恢复时间排序。刷新、Reload Window 和切换工作区后星标仍保留，右键继续/复制 ID 仍可用。
-- 默认搜索只匹配用户提问；扩大到 assistant 消息后可搜到回复中的独有词，选择全部内容后可搜到工具参数与输出。放大镜控制展开/收起，关闭会清空筛选；切换范围、清空、加载更多与刷新索引正常。
+- 默认搜索只匹配用户提问；扩大到 assistant 消息后可搜到回复中的独有词，选择全部内容后可搜到工具参数与输出。点击搜索框上方的 harness 图标后，列表和检索都只保留该 harness；All harnesses 恢复全部。放大镜控制展开/收起，关闭会清空筛选；切换范围、清空、加载更多与刷新索引正常。
+- **Export PDF** 将包含中文、公式和折叠态工具摘要的当前对话写入工作区根目录，工具参数与输出详情不导出；多根工作区与未打开工作区时正确询问目标位置，取消不生成文件；所有新增提示为英文。
 - 点击历史不会打开浏览器，Ports 面板不新增服务；正文、公式、工具组、原文切换与用户目录正常。
 - Pi / Claude 的继续动作分别进入真实原生 TUI，cwd 正确，既有 plugins / skills / 环境继续生效。
 - Pi `/session-hub` 和 `npm run web` 均仍正常。

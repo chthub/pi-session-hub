@@ -17,6 +17,7 @@ let outlineButtons = new Map();
 let resizeObserver;
 let measureFrame;
 let scrollFrame;
+let exportingPdf = false;
 // Steps match Chrome's Ctrl+wheel zoom levels.
 const zoomLevels = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
 let zoom = readZoom();
@@ -382,6 +383,7 @@ async function openSession(uid) {
   const version = ++detailVersion;
   selected = uid;
   detail = null;
+  $("export-pdf").disabled = true;
   setSidebar(false);
   $("outline-filter").value = "";
   clearOutline(t("正在读取用户消息…", "Loading user messages…"));
@@ -391,6 +393,7 @@ async function openSession(uid) {
     const result = await transport.getSession(uid);
     if (version !== detailVersion) return;
     detail = result;
+    $("export-pdf").disabled = exportingPdf;
     renderDetail();
     $("viewer").scrollTop = 0;
     scheduleMeasure();
@@ -414,18 +417,30 @@ $("sidebar-backdrop").addEventListener("click", () => { setSidebar(false); $("si
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && document.body.dataset.sidebar === "open") { setSidebar(false); $("sidebar-toggle").focus(); }
 });
+function isDarkTheme() {
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit) return explicit === "dark";
+  if (document.body.dataset.host === "vscode") {
+    if (document.body.classList.contains("vscode-dark") || document.body.classList.contains("vscode-high-contrast")) return true;
+    if (document.body.classList.contains("vscode-light") || document.body.classList.contains("vscode-high-contrast-light")) return false;
+  }
+  return matchMedia("(prefers-color-scheme: dark)").matches;
+}
 function updateThemeButton() {
-  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = isDarkTheme();
   $("theme-toggle").textContent = "◐";
   $("theme-toggle").title = dark ? t("切换浅色模式", "Switch to light mode") : t("切换深色模式", "Switch to dark mode");
   $("theme-toggle").setAttribute("aria-label", $("theme-toggle").title);
 }
 $("theme-toggle").addEventListener("click", () => {
-  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = isDarkTheme();
   document.documentElement.dataset.theme = dark ? "light" : "dark";
   updateThemeButton();
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateThemeButton);
+if (document.body.dataset.host === "vscode") {
+  new MutationObserver(updateThemeButton).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+}
 updateThemeButton();
 $("search").addEventListener("input", () => {
   ++listVersion;
@@ -435,6 +450,22 @@ $("search").addEventListener("input", () => {
 });
 $("harness").addEventListener("change", () => { clearTimeout(timer); loadList(); });
 $("more").addEventListener("click", () => loadList(true));
+$("export-pdf").addEventListener("click", async () => {
+  if (!detail || exportingPdf) return;
+  exportingPdf = true;
+  $("export-pdf").disabled = true;
+  $("export-pdf").textContent = "Exporting…";
+  notice("Exporting conversation as PDF…");
+  try {
+    const result = await transport.exportPdf(selected);
+    notice(result.cancelled ? "PDF export cancelled." : `PDF exported: ${result.path}`);
+  } catch (error) { notice(`PDF export failed: ${error.message}`, true); }
+  finally {
+    exportingPdf = false;
+    $("export-pdf").disabled = !detail;
+    $("export-pdf").textContent = "Export PDF";
+  }
+});
 $("refresh").addEventListener("click", async () => {
   $("refresh").disabled = true;
   notice(t("正在扫描本机会话…", "Scanning local sessions…"));

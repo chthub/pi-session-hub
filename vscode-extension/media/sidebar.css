@@ -57,6 +57,16 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .search-controls input { height: 32px; padding: 5px 6px 5px 29px; background: var(--vscode-input-background, var(--surface)); color: var(--vscode-input-foreground, var(--foreground)); }
 .search-controls input::placeholder { color: var(--vscode-input-placeholderForeground, var(--muted)); }
 .scope-field { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.harness-filters { display: flex; gap: 4px; margin-bottom: 8px; }
+.harness-filters button {
+  display: grid; place-items: center; flex: 1; min-width: 0; height: 28px; padding: 0;
+  border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--muted);
+}
+.harness-filters button:hover { background: var(--hover); color: var(--foreground); }
+.harness-filters button[aria-pressed="true"] {
+  border-color: var(--focus); background: var(--vscode-list-inactiveSelectionBackground, var(--hover)); color: var(--foreground);
+}
+.filter-icon { width: 16px; height: 16px; object-fit: contain; }
 .scope-field label { flex: none; color: var(--muted); font-size: 11px; }
 .search-controls select { flex: 1; height: 28px; padding: 3px 4px; font-size: 11px; background: var(--vscode-dropdown-background, var(--surface)); color: var(--vscode-dropdown-foreground, var(--foreground)); }
 #search-summary { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }

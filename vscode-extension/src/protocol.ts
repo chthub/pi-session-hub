@@ -1,4 +1,4 @@
-export type Operation = "status" | "getSession" | "refresh" | "resume" | "copyId" | "openLink";
+export type Operation = "status" | "getSession" | "refresh" | "resume" | "copyId" | "openLink" | "exportPdf";
 export interface ViewerRequest {
   type: "sessionHub.request";
   id: number;
@@ -20,8 +20,8 @@ export function parseViewerRequest(value: unknown, boundUid: string): ViewerRequ
   const message = value as Record<string, unknown>;
   if (Object.keys(message).some(key => !["type", "id", "operation", "uid", "linkId"].includes(key)) ||
       message.type !== "sessionHub.request" || !Number.isSafeInteger(message.id) || Number(message.id) < 1 ||
-      !["status", "getSession", "refresh", "resume", "copyId", "openLink"].includes(String(message.operation))) throw new Error("Unsupported session request");
-  const needsUid = ["getSession", "resume", "copyId", "openLink"].includes(String(message.operation));
+      !["status", "getSession", "refresh", "resume", "copyId", "openLink", "exportPdf"].includes(String(message.operation))) throw new Error("Unsupported session request");
+  const needsUid = ["getSession", "resume", "copyId", "openLink", "exportPdf"].includes(String(message.operation));
   if (needsUid ? message.uid !== boundUid : message.uid !== undefined) throw new Error("The session ID does not match this page");
   if (message.operation === "openLink"
     ? typeof message.linkId !== "string" || !/^[a-f0-9]{32}$/.test(message.linkId)

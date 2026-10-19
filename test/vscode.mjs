@@ -41,6 +41,9 @@ for (const request of [
   { type: "sessionHub.request", id: 1, operation: "openLink", uid: "pi:allowed", linkId: "/etc/passwd" },
   { type: "sessionHub.request", id: 1, operation: "openLink", uid: "pi:elsewhere", linkId: "a".repeat(32) },
   { type: "sessionHub.request", id: 1, operation: "status", linkId: "a".repeat(32) },
+  { type: "sessionHub.request", id: 1, operation: "exportPdf", uid: "pi:elsewhere" },
+  { type: "sessionHub.request", id: 1, operation: "exportPdf", uid: "pi:allowed", path: "/etc/passwd" },
+  { type: "sessionHub.request", id: 1, operation: "exportPdf", uid: "pi:allowed", html: "<script>bad()</script>" },
 ]) assert.throws(() => parseViewerRequest(request, "pi:allowed"));
 check("typed protocol rejects paths, argv, destructive actions and other UIDs", true);
 
@@ -143,14 +146,15 @@ class Uri {
 }
 class TreeItem { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState; } }
 const commands = new Map(), panels = [], terminals = [], errors = [], settingUpdates = [], environmentPicks = [], confirmations = [];
-const openedFiles = [];
+const openedFiles = [], pdfBrowserLaunches = [], progressMessages = [], pdfFolderPrompts = [];
+let pickedPdfFolder, pickedPdfDirectory;
 const decorationProviders = new Set();
 let sidebarDensity = "comfortable", configurationChanged, clipboard, tree, view, workspaceChanged, confirmation = "Resume in terminal", pickedProfile = "default", pickedTarget, pickedCwd, extension;
 const newSessionPicks = [];
 const vscode = {
   Disposable, EventEmitter, Uri, TreeItem, ThemeIcon: class { constructor(id) { this.id = id; } },
   ThemeColor: class { constructor(id) { this.id = id; } },
-  TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, ViewColumn: { Active: -1 },
+  TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, ViewColumn: { Active: -1 }, ProgressLocation: { Notification: 15 },
   workspace: { workspaceFolders: [{ uri: new Uri(project) }], onDidChangeWorkspaceFolders(callback) { workspaceChanged = callback; return new Disposable(); },
     getConfiguration(section) {
       if (section === "sessionHub.sidebar") return { get: key => key === "density" ? sidebarDensity : undefined };
@@ -163,7 +167,7 @@ const vscode = {
     registerFileDecorationProvider(provider) { tree = provider; decorationProviders.add(provider); return new Disposable(() => decorationProviders.delete(provider)); },
     registerWebviewViewProvider(id, provider) { assert.equal(id, "sessionHub.sessions"); view = provider; return new Disposable(() => { view = undefined; }); },
     createTreeView() { throw new Error("the two-line sidebar must not create a single-line native tree"); },
-    async withProgress(_options, callback) { return callback(); },
+    async withProgress(options, callback) { progressMessages.push(options); return callback(); },
     async showWarningMessage(message) { confirmations.push(message); return confirmation; },
     async showQuickPick(items, options) {
       if (items[0]?.target) { newSessionPicks.push({ items, options }); return items.find(item => item.target.id === pickedTarget); }
@@ -171,6 +175,8 @@ const vscode = {
       environmentPicks.push({ items, options }); return items.find(item => item.profile.id === pickedProfile);
     },
     async showErrorMessage(message) { errors.push(message); },
+    async showWorkspaceFolderPick(options) { pdfFolderPrompts.push(options); return pickedPdfFolder; },
+    async showOpenDialog(options) { pdfFolderPrompts.push(options); return pickedPdfDirectory ? [pickedPdfDirectory] : undefined; },
     createTerminal(options) { const terminal = { options, show() { this.shown = true; } }; terminals.push(terminal); return terminal; },
     createWebviewPanel(_type, title, _column, options) {
       const callbacks = [], disposeCallbacks = [];
@@ -236,7 +242,13 @@ try {
   module.require = name => {
     if (name === "vscode") return vscode;
     if (name === "node:os") return { ...os, homedir: () => home };
-    if (name === "node:http" || name === "node:child_process") throw new Error("VS Code host must not import HTTP server or detached launcher");
+    if (name === "node:http") throw new Error("VS Code host must not import an HTTP server");
+    if (name === "node:child_process") return { spawn(command, args, options) {
+      assert.ok(args.some(arg => arg.startsWith("--headless")));
+      assert.ok(!options?.shell); // A managed process group may be used to kill browser descendants on timeout.
+      pdfBrowserLaunches.push({ command, args, options });
+      return nativeRequire(name).spawn(command, args, options);
+    } };
     return nativeRequire(name);
   };
   module._compile(fs.readFileSync(entry, "utf8"), entry);
@@ -288,6 +300,10 @@ try {
   const panel = panels[0];
   await commands.get("sessionHub.open")(pi.session.uid);
   check("open creates/reuses an editor WebviewPanel", panels.length === 1 && panel.reveals === 1);
+  check("viewer retains its page context while hidden by another editor tab", panel.options.retainContextWhenHidden === true);
+  check("viewer paints the host editor background before external styles load",
+    panel.webview.html.includes("background: var(--vscode-editor-background") &&
+    panel.webview.html.indexOf('id="session-hub-initial-style"') < panel.webview.html.indexOf('rel="stylesheet"'));
   check("only the Session tab title is truncated; tree retains full prompt", panel.title === sessionTabTitle(longPrompt, pi.session.nativeId) && panel.title.endsWith("…") && pi.label === longPrompt);
   check("webview resources are restricted to packaged media", panel.options.localResourceRoots.length === 1 && panel.options.localResourceRoots[0].fsPath === path.join(root, "dist/media"));
   check("webview HTML has strict CSP, two-column mode and no localhost endpoint", panel.webview.html.includes("connect-src &#39;none&#39;") && panel.webview.html.includes('data-host="vscode"') && panel.webview.html.includes('nonce="') && !panel.webview.html.includes("http://127.0.0.1") && !panel.webview.html.includes('src="/app.js"'));
@@ -313,6 +329,39 @@ try {
   check("webview cannot read a different session", Boolean((await request("getSession", { uid: claude.session.uid })).error));
   await request("copyId", { uid: pi.session.uid });
   check("viewer copies its indexed session ID", clipboard === pi.session.uid);
+  const sourceBeforePdf = fs.readFileSync(piSource);
+  const exported = await request("exportPdf", { uid: pi.session.uid });
+  assert.ok(!exported.error, exported.error);
+  check("Export PDF writes a real document to the current workspace root without modifying source history",
+    path.dirname(exported.result.path) === project && exported.result.fileName.endsWith(".pdf") &&
+    fs.readFileSync(exported.result.path).subarray(0, 5).toString() === "%PDF-" && fs.readFileSync(piSource).equals(sourceBeforePdf) &&
+    pdfBrowserLaunches.length >= 1 && progressMessages.some(options => options.title === "Exporting conversation as PDF…"));
+  check("PDF destination and HTML cannot be supplied by the webview",
+    Boolean((await request("exportPdf", { uid: pi.session.uid, path: "/etc/passwd" })).error) &&
+    Boolean((await request("exportPdf", { uid: claude.session.uid })).error));
+  const launchesAfterFirstPdf = pdfBrowserLaunches.length;
+  const secondPdfWorkspace = path.join(temp, "second workspace");
+  fs.mkdirSync(secondPdfWorkspace);
+  const initialFolders = vscode.workspace.workspaceFolders;
+  try {
+    vscode.workspace.workspaceFolders = [...initialFolders, { name: "Second workspace", uri: new Uri(secondPdfWorkspace) }];
+    const cancelled = await request("exportPdf", { uid: pi.session.uid });
+    assert.equal(cancelled.result.cancelled, true);
+    assert.equal(pdfBrowserLaunches.length, launchesAfterFirstPdf);
+    pickedPdfFolder = vscode.workspace.workspaceFolders[1];
+    const multiple = await request("exportPdf", { uid: pi.session.uid });
+    assert.ok(!multiple.error, multiple.error);
+    assert.equal(path.dirname(multiple.result.path), secondPdfWorkspace);
+    vscode.workspace.workspaceFolders = [];
+    pickedPdfDirectory = undefined;
+    assert.equal((await request("exportPdf", { uid: pi.session.uid })).result.cancelled, true);
+    pickedPdfDirectory = new Uri(secondPdfWorkspace);
+    const noWorkspace = await request("exportPdf", { uid: pi.session.uid });
+    assert.ok(!noWorkspace.error, noWorkspace.error);
+    assert.equal(path.dirname(noWorkspace.result.path), secondPdfWorkspace);
+    assert.ok(pdfFolderPrompts.every(prompt => !/\p{Script=Han}/u.test(JSON.stringify(prompt))));
+    check("PDF export asks for multi-root or no-workspace destinations and cancels without writing", true);
+  } finally { vscode.workspace.workspaceFolders = initialFolders; }
   await request("resume", { uid: pi.session.uid });
   check("detected Pi environment is passed explicitly without an account picker", environmentPicks.length === 0 && terminals[0].options.env.PI_CODING_AGENT_DIR === profiles[1].agentDir && terminals[0].options.name.includes("Pi Research") && confirmations[0].includes("Pi Research"));
   check("Pi resume uses native terminal with exact argv and source-backed cwd", terminals[0].shown && terminals[0].options.shellPath === "pi" && terminals[0].options.shellArgs[0] === "--session" && terminals[0].options.shellArgs[1] === pi.session.path && terminals[0].options.cwd === project);
@@ -430,6 +479,7 @@ try {
     ["search", { text: "query" }], ["search", { text: 42, searchScope: "user" }],
     ["search", { text: "x".repeat(2001), searchScope: "user" }],
     ["search", { text: "query", searchScope: "all", path: "/etc/passwd" }],
+    ...["unknown", ["pi"], null, 42].map(harness => ["search", { text: "", searchScope: "user", harness }]),
   ]) assert.ok((await sidebarRequest(action, fields)).error);
   check("sidebar rejects unknown UIDs, paths, argv, extra fields and forged actions", true);
   const sidebarRows = () => sidebarState().groups.flatMap(group => group.sessions);
@@ -443,12 +493,40 @@ try {
   ]) {
     assert.ok(!(await sidebarRequest("search", { text, searchScope })).error);
     assert.equal(sidebarRows().some(row => row.uid === pi.session.uid), expected, `${searchScope}: ${text}`);
-    assert.deepEqual(sidebarState().search, { text, searchScope });
+    assert.deepEqual(sidebarState().search, { text, searchScope, harness: "" });
   }
+  check("harness icons sit above the search field and use packaged light/dark assets",
+    sidebar.webview.html.indexOf('id="search-harness"') < sidebar.webview.html.indexOf('id="search"') &&
+    !sidebar.webview.html.includes('src="harness/') &&
+    ["pi", "claude-code", "codex", "opencode", "crush", "jcode"].every(harness =>
+      sidebar.webview.html.includes(`data-harness="${harness}"`) &&
+      ["light", "dark"].every(theme => sidebar.webview.html.includes(`/harness/${theme}/${harness}.svg`))));
+  for (const harness of ["pi", "claude-code", "codex", "opencode", "crush", "jcode"]) {
+    assert.ok(!(await sidebarRequest("search", { text: "", searchScope: "user", harness })).error);
+    const expected = tree.sessions.filter(session => session.harness === harness);
+    assert.ok(expected.length > 0);
+    assert.equal(sidebarState().groups.reduce((sum, group) => sum + group.total, 0), expected.length);
+    assert.ok(sidebarRows().every(row => row.harness === harness));
+  }
+  check("selecting any harness immediately filters the list without a search keyword", true);
+  for (const [harness, expected] of [["pi", [pi.session.uid]], ["claude-code", []], ["", [pi.session.uid]]]) {
+    await sidebarRequest("search", { text: "scopeuserneedle", searchScope: "user", harness });
+    assert.deepEqual(sidebarRows().map(row => row.uid), expected);
+  }
+  check("keyword searches are restricted to the selected harness; All restores cross-harness search", true);
+  await sidebarRequest("search", { text: "", searchScope: "user", harness: "pi" });
+  await sidebarRequest("closeSearch");
+  check("closing search clears the harness filter as well as the keyword",
+    sidebarState().search.harness === "" && sidebarRows().some(row => row.harness === "claude-code"));
+  await sidebarRequest("search", { text: "scopeuserneedle", searchScope: "user", harness: "pi" });
+  check("a delayed search after Close cannot restore a hidden harness filter",
+    sidebarState().search.text === "" && sidebarState().search.harness === "" && sidebarRows().some(row => row.harness === "claude-code"));
+  await commands.get("sessionHub.search")();
   unchanged(beforeSearchActions);
-  await sidebarRequest("search", { text: "scopeuserneedle", searchScope: "user" });
+  await sidebarRequest("search", { text: "scopeuserneedle", searchScope: "user", harness: "pi" });
   await commands.get("sessionHub.refresh")();
-  check("active search survives an index refresh", sidebarState().search.text === "scopeuserneedle" && sidebarRows().length === 1);
+  check("active search and harness filter survive an index refresh",
+    sidebarState().search.text === "scopeuserneedle" && sidebarState().search.harness === "pi" && sidebarRows().length === 1);
   await sidebarRequest("search", { text: "  ", searchScope: "user" });
   assert.ok(sidebarRows().length > 1);
   const beforeSidebarActions = snapshot();
@@ -457,12 +535,20 @@ try {
     let finishSlow;
     tree.service.listSessions = query => query.text === "slow"
       ? new Promise(resolve => { finishSlow = resolve; }) : Promise.resolve([pi.session]);
-    const slow = tree.setSearch("slow", "all");
-    await tree.setSearch("latest", "user");
+    const slow = tree.setSearch("slow", "all", "claude-code");
+    await tree.setSearch("latest", "user", "pi");
     finishSlow([claude.session]); await slow;
     assert.equal(tree.sidebarSearch.text, "latest");
+    assert.equal(tree.sidebarSearch.harness, "pi");
     assert.deepEqual(sidebarRows().map(row => row.uid), [pi.session.uid]);
-    check("late search completion cannot overwrite a newer query or scope", true);
+    check("late search completion cannot overwrite a newer query, scope or harness", true);
+    const slowAgain = tree.setSearch("slow", "all", "claude-code");
+    await tree.setSearch("", "user", "pi");
+    finishSlow([claude.session]); await slowAgain;
+    assert.equal(tree.sidebarSearch.text, "");
+    assert.equal(tree.sidebarSearch.harness, "pi");
+    assert.ok(sidebarRows().length > 0 && sidebarRows().every(row => row.harness === "pi"));
+    check("filter-only changes also cancel an older in-flight keyword search", true);
   } finally { tree.service.listSessions = listSessions; await tree.setSearch("", "user"); }
   unchanged(beforeSidebarActions);
   await sidebarRequest("star", { uid: pi.session.uid, starred: true });
@@ -535,12 +621,13 @@ try {
     const listSessions = tree.service.listSessions;
     try {
       tree.sessions = Array.from({ length: 705 }, (_, i) => ({ ...pi.session, uid: `pi:match-${i}`, repo: project, cwd: project }));
+      tree.sessions.unshift(...Array.from({ length: 600 }, (_, i) => ({ ...claude.session, uid: `claude-code:excluded-${i}`, repo: project, cwd: project })));
       const offsets = [];
       tree.service.listSessions = async query => {
-        assert.equal(query.searchScope, "conversation"); offsets.push(query.offset);
-        return tree.sessions.slice(query.offset, query.offset + query.limit);
+        assert.equal(query.searchScope, "conversation"); assert.equal(query.harness, "pi"); offsets.push(query.offset);
+        return tree.sessions.filter(session => session.harness === query.harness).slice(query.offset, query.offset + query.limit);
       };
-      await sidebarRequest("search", { text: "pagedneedle", searchScope: "conversation" });
+      await sidebarRequest("search", { text: "pagedneedle", searchScope: "conversation", harness: "pi" });
       group = sidebarState().groups.find(g => g.scope === "current");
       assert.deepEqual(offsets, [0, 500]);
       assert.equal(group.total, 705); assert.equal(group.sessions.length, 100);
@@ -549,13 +636,17 @@ try {
       await sidebarRequest("star", { uid: "pi:match-704", starred: false });
       await sidebarRequest("more", { scope: "current" });
       assert.equal(currentRows().length, 200);
-      check("search covers every index page before grouping, star pinning and sidebar pagination", true);
+      assert.ok(sidebarRows().every(row => row.harness === "pi"));
+      check("harness-restricted search covers every index page before grouping, star pinning and pagination", true);
     } finally { tree.service.listSessions = listSessions; await tree.setSearch("", "user"); }
   } finally { tree.sessions = originalSessions; vscode.workspace.workspaceFolders = originalFolders; tree.rescope(); }
+  await sidebarRequest("search", { text: "", searchScope: "user", harness: "pi" });
   const oldSidebar = sidebar;
   sidebar = mountSidebar();
   await sidebarRequest("ready");
-  check("recreated sidebar restores current state and detaches old message listeners", oldSidebar.callbacks.size === 0 && sidebarRows().some(row => row.uid === pi.session.uid));
+  check("recreated sidebar restores the harness filter and detaches old message listeners",
+    oldSidebar.callbacks.size === 0 && sidebarState().search.harness === "pi" && sidebarRows().length > 0 && sidebarRows().every(row => row.harness === "pi"));
+  await sidebarRequest("search", { text: "", searchScope: "user", harness: "" });
 
   let starChanges = 0;
   tree.onDidChangeTreeData(() => { starChanges++; });
@@ -705,6 +796,10 @@ check("local link transport sends only bound UID and opaque link ID",
   sent.at(-1).operation === "openLink" && sent.at(-1).linkId === "a".repeat(32) && sent.at(-1).path === undefined);
 listeners.message({ data: { type: "sessionHub.response", id: sent.at(-1).id, result: { ok: true } } });
 await linkPending;
+const pdfPending = transport.exportPdf("pi:bound");
+check("PDF transport sends only the bound UID and export operation", sent.at(-1).operation === "exportPdf" && sent.at(-1).uid === "pi:bound" && sent.at(-1).path === undefined);
+listeners.message({ data: { type: "sessionHub.response", id: sent.at(-1).id, result: { path: "/synthetic/export.pdf" } } });
+assert.equal((await pdfPending).path, "/synthetic/export.pdf");
 const timeout = transport.refresh();
 [...timers.values()][0]();
 await assert.rejects(() => timeout, /timed out/);

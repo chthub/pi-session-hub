@@ -7,14 +7,21 @@
   for (const scope of Object.keys(collapsed)) if (typeof saved.collapsed?.[scope] === "boolean") collapsed[scope] = saved.collapsed[scope];
   const groups = document.getElementById("groups"), status = document.getElementById("status");
   const search = document.getElementById("search"), scope = document.getElementById("search-scope"), summary = document.getElementById("search-summary");
-  const searchPanel = document.getElementById("search-panel");
+  const searchPanel = document.getElementById("search-panel"), harness = document.getElementById("search-harness");
   let panelOpen = false;
   search.value = typeof saved.text === "string" ? saved.text.slice(0, 2000) : "";
   scope.value = ["user", "conversation", "all"].includes(saved.searchScope) ? saved.searchScope : "user";
+  const harnessButtons = Array.from(harness.querySelectorAll("button"));
+  let selectedHarness = harnessButtons.some(button => button.dataset.harness === saved.harness) ? saved.harness : "";
+  function selectHarness(value) {
+    selectedHarness = value;
+    for (const button of harnessButtons) button.setAttribute("aria-pressed", String(button.dataset.harness === value));
+  }
+  selectHarness(selectedHarness);
   const pending = new Map(), busy = new Set();
   let sequence = 0, state, error = "", firstRender = true, searchVersion = 0, searchTimer, searching = false, showingSearch = false;
-  const query = () => ({ text: search.value.trim(), searchScope: scope.value });
-  const save = () => vscode.setState({ collapsed, scrollTop: window.scrollY, text: search.value, searchScope: scope.value });
+  const query = () => ({ text: search.value.trim(), searchScope: scope.value, harness: selectedHarness });
+  const save = () => vscode.setState({ collapsed, scrollTop: window.scrollY, text: search.value, searchScope: scope.value, harness: selectedHarness });
   window.addEventListener("scroll", save, { passive: true });
   function notice() {
     status.textContent = error || state?.status || "";
@@ -22,7 +29,7 @@
     groups.setAttribute("aria-busy", String(searching));
     for (const more of groups.querySelectorAll('button[data-action="more"]')) more.disabled = searching || busy.has(more.dataset.key);
     const total = state?.groups.reduce((sum, group) => sum + group.total, 0) || 0;
-    summary.textContent = searching ? "Searching…" : query().text ? (total ? `${total} ${total === 1 ? "session" : "sessions"} found · local excerpts` : "No matches. Try another query or a wider scope.") : "Search local excerpts, not full transcripts.";
+    summary.textContent = searching ? "Searching…" : query().text ? (total ? `${total} ${total === 1 ? "session" : "sessions"} found · local excerpts` : "No matches. Try another query, harness or a wider scope.") : selectedHarness ? `${total} ${total === 1 ? "session" : "sessions"} in ${harnessButtons.find(button => button.dataset.harness === selectedHarness).title}.` : "Search local excerpts, not full transcripts.";
     search.placeholder = scope.value === "user" ? "Search user prompts…" : scope.value === "conversation" ? "Search user + assistant messages…" : "Search all content, including tools…";
   }
   async function runSearch() {
@@ -46,6 +53,10 @@
     if (event.key === "Escape") { event.preventDefault(); search.value = ""; void runSearch(); }
   });
   scope.addEventListener("change", () => { void runSearch(); });
+  for (const button of harnessButtons) button.addEventListener("click", () => {
+    selectHarness(button.dataset.harness);
+    void runSearch();
+  });
   document.getElementById("search-close").addEventListener("click", () => {
     request("closeSearch").catch(e => { error = e.message; notice(); });
   });
@@ -162,7 +173,7 @@
     // A native <details> toggle event is queued. Capture its live state before
     // replacing nodes so an immediate host update cannot undo a user toggle.
     if (!showingSearch) for (const section of groups.querySelectorAll(".group")) collapsed[section.dataset.scope] = !section.open;
-    showingSearch = Boolean(query().text);
+    showingSearch = Boolean(query().text || selectedHarness);
     const focusKey = document.activeElement?.dataset.key;
     const scroll = firstRender && Number.isFinite(saved.scrollTop) ? Math.max(0, saved.scrollTop) : window.scrollY;
     firstRender = false;
@@ -225,12 +236,12 @@
         searchPanel.hidden = !panelOpen;
         if (!panelOpen) {
           clearTimeout(searchTimer); searchVersion++; searching = false;
-          search.value = ""; scope.value = incoming.searchScope; save();
+          search.value = ""; scope.value = incoming.searchScope; selectHarness(""); save();
         }
       }
       if (opening) search.focus({ preventScroll: true });
       const current = query();
-      if (incoming.text !== current.text || incoming.searchScope !== current.searchScope) return;
+      if (incoming.text !== current.text || incoming.searchScope !== current.searchScope || (incoming.harness || "") !== current.harness) return;
       state = data; render();
     }
     else if (data?.type === "sessionHub.sidebar.result") {

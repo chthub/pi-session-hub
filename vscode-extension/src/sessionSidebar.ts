@@ -2,14 +2,14 @@ import * as vscode from "vscode";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { redact } from "../../src/security.ts";
-import type { SearchScope } from "../../src/types.ts";
+import { HARNESS_ORDER, type HarnessId, type SearchScope } from "../../src/types.ts";
 import type { SessionTree } from "./sessionTree.ts";
 import type { ProjectScope } from "./projectScope.ts";
 
 const PAGE_SIZE = 100;
 const SCOPES = ["current", "unscoped", "other"] as const;
 type SidebarAction = "ready" | "search" | "closeSearch" | "more" | "open" | "star" | "resume" | "copyId";
-interface SidebarRequest { type: "sessionHub.sidebar"; id: number; action: SidebarAction; uid?: string; starred?: boolean; scope?: ProjectScope; text?: string; searchScope?: SearchScope }
+interface SidebarRequest { type: "sessionHub.sidebar"; id: number; action: SidebarAction; uid?: string; starred?: boolean; scope?: ProjectScope; text?: string; searchScope?: SearchScope; harness?: HarnessId | "" }
 
 function parseRequest(value: unknown): SidebarRequest {
   if (!value || typeof value !== "object") throw new Error("Invalid sidebar request");
@@ -19,9 +19,10 @@ function parseRequest(value: unknown): SidebarRequest {
   switch (r.action) {
     case "ready": case "closeSearch": break;
     case "search":
-      keys.push("text", "searchScope");
+      keys.push("text", "searchScope", "harness");
       if (typeof r.text !== "string" || r.text.length > 2000) throw new Error("Invalid search query (maximum 2,000 characters)");
       if (!["user", "conversation", "all"].includes(r.searchScope as string)) throw new Error("Unknown search scope");
+      if (r.harness !== undefined && r.harness !== "" && !HARNESS_ORDER.includes(r.harness as HarnessId)) throw new Error("Unknown harness");
       break;
     case "more":
       keys.push("scope");
@@ -98,8 +99,10 @@ export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Dispos
           case "ready": this.ready = true; this.publish(); break;
           case "closeSearch": this.searchOpen = false; await this.clearSearch(); break;
           case "search":
+            // A debounced request can arrive after Close. Never restore hidden filters.
+            if (!this.searchOpen) { this.publish(); break; }
             for (const scope of SCOPES) this.limits[scope] = PAGE_SIZE;
-            await this.tree.setSearch(request.text!, request.searchScope!);
+            await this.tree.setSearch(request.text!, request.searchScope!, request.harness ?? "");
             break;
           case "more": this.limits[request.scope!] += PAGE_SIZE; this.publish(); break;
           case "star": await this.tree.setStarred(request.uid!, request.starred!); break;
@@ -115,7 +118,8 @@ export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Dispos
     const source = escapeAttribute(view.webview.cspSource);
     view.webview.html = fs.readFileSync(vscode.Uri.joinPath(media, "sidebar.html").fsPath, "utf8")
       .replaceAll("{{cspSource}}", source).replaceAll("{{nonce}}", nonce)
-      .replace("{{style}}", resource("sidebar.css")).replace("{{script}}", resource("sidebar.js"));
+      .replace("{{style}}", resource("sidebar.css")).replace("{{script}}", resource("sidebar.js"))
+      .replace(/src="(harness\/(?:light|dark)\/[a-z-]+\.svg)"/g, (_match, file: string) => `src="${resource(file)}"`);
   }
 
   private publish(): void {

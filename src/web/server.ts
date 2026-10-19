@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { SessionHubService } from "../core/service.ts";
 import { HARNESS_ORDER, type HarnessId } from "../types.ts";
 import { sanitize, sessionSummary, viewerDetail } from "./presentation.ts";
+import { renderSessionPdf } from "./pdf.ts";
+import { saveSessionPdf } from "./pdf-file.ts";
 
 const require = createRequire(import.meta.url);
 const publicDir = fileURLToPath(new URL("./public/", import.meta.url));
@@ -43,9 +45,10 @@ function isLoopbackOrigin(origin: string): boolean {
   return Boolean(match && isLoopbackAuthority(match[1]));
 }
 
-export async function startWebViewer(options: { home?: string; port?: number } = {}) {
+export async function startWebViewer(options: { home?: string; port?: number; workspaceDir?: string } = {}) {
   const home = options.home ?? os.homedir();
   const port = options.port ?? 43123;
+  const workspaceDir = path.resolve(options.workspaceDir ?? process.cwd());
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("端口必须是 0–65535 的整数");
   const service = new SessionHubService({ home });
   await service.init();
@@ -85,6 +88,19 @@ export async function startWebViewer(options: { home?: string; port?: number } =
       }
       if (url.pathname === "/api/refresh" && req.method === "POST") {
         json(res, 200, await refresh()); return;
+      }
+      if (url.pathname === "/api/export-pdf") {
+        if (req.method !== "POST") { json(res, 405, { error: "PDF export requires POST." }); return; }
+        if ([...url.searchParams.keys()].some(key => key !== "uid") || url.searchParams.getAll("uid").length !== 1 || req.headers["transfer-encoding"] || Number(req.headers["content-length"] ?? 0) !== 0) {
+          json(res, 400, { error: "PDF export accepts only one indexed session ID, not paths or document content." }); return;
+        }
+        const uid = url.searchParams.get("uid") ?? "";
+        if (!uid || uid.length > 2000) { json(res, 400, { error: "Invalid session ID." }); return; }
+        const detail = await service.getSession(uid, { preserveFormatting: true, includeToolActivity: true, locale: "en" });
+        if (!detail) { json(res, 404, { error: "The source session no longer exists or cannot be read." }); return; }
+        const pdf = await renderSessionPdf(detail, { katexDir });
+        const file = await saveSessionPdf(workspaceDir, detail, pdf);
+        json(res, 200, { path: file, fileName: path.basename(file) }); return;
       }
       if (req.method !== "GET") { json(res, 405, { error: "方法不允许" }); return; }
       if (url.pathname === "/api/status") {

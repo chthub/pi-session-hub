@@ -37,6 +37,7 @@
     listSessions(query) { return this.request(`/api/sessions?${new URLSearchParams(query)}`); }
     getSession(uid) { return this.request(`/api/session?${new URLSearchParams({ uid })}`); }
     refresh() { return this.request("/api/refresh", "POST"); }
+    exportPdf(uid) { return this.request(`/api/export-pdf?${new URLSearchParams({ uid })}`, "POST"); }
   }
   class VscodeTransport {
     constructor() {
@@ -78,6 +79,7 @@
     status() { return this.request("status"); }
     getSession(uid) { return this.request("getSession", uid); }
     openLink(uid, linkId) { return this.request("openLink", uid, linkId); }
+    exportPdf(uid) { return this.request("exportPdf", uid); }
     refresh() { return this.request("refresh"); }
   }
   window.sessionHubTransport = document.body.dataset.host === "vscode" ? new VscodeTransport() : new HttpTransport();
