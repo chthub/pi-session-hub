@@ -74,6 +74,88 @@
     });
     return node;
   }
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function svg(className, markup) {
+    // Static, trusted markup only; never pass session data here.
+    const node = document.createElementNS(SVG_NS, "svg");
+    node.setAttribute("viewBox", "0 0 16 16"); node.setAttribute("aria-hidden", "true");
+    if (className) node.setAttribute("class", className);
+    node.innerHTML = markup; return node;
+  }
+  /** "3 minutes ago" -> "3m", "2 days ago" -> "2d", this year's "2026-10-15" -> "10-15". Full text stays in the tooltip. */
+  function compactRecency(text) {
+    if (text === "Just now") return "now";
+    const ago = /^(\d+) (minute|hour|day)s? ago$/.exec(text);
+    if (ago) return ago[1] + ago[2][0];
+    const date = /^(\d{4})-(\d\d-\d\d)$/.exec(text);
+    if (date && Number(date[1]) === new Date().getFullYear()) return date[2];
+    return text;
+  }
+  const textCanvas = document.createElement("canvas");
+  const textMetrics = textCanvas.getContext("2d", { willReadFrequently: true });
+  const inkAscents = new Map();
+  let alignmentFrame;
+  function alignIconTops() {
+    if (!textMetrics) return;
+    // A zero-height inline marker locates the *real* text baseline, including
+    // Chromium's button layout and the user's font. An em-box inset cannot do that.
+    const entries = Array.from(groups.querySelectorAll(".session-title"))
+      .filter(title => title.getClientRects().length)
+      .map(title => {
+        const marker = document.createElement("span");
+        marker.className = "title-baseline"; marker.setAttribute("aria-hidden", "true"); title.prepend(marker);
+        return { title, marker, slot: title.closest(".session-card").querySelector(".harness-icon-slot") };
+      });
+    // Batch layout reads before writes; moving artwork must not change row height.
+    const offsets = entries.map(({ title, marker, slot }) => {
+      const style = getComputedStyle(title);
+      const font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const text = title.textContent.replace(/\s+/g, " ").trim() || "Ag";
+      const baseline = marker.getBoundingClientRect().top, scale = window.devicePixelRatio || 1;
+      const fraction = baseline * scale - Math.floor(baseline * scale);
+      const left = title.getBoundingClientRect().left * scale;
+      const xFraction = left - Math.floor(left);
+      const width = Math.max(1, Math.ceil(title.clientWidth * scale) + 1);
+      const key = JSON.stringify([font, text, width, scale, fraction, xFraction]);
+      let ascent = inkAscents.get(key);
+      if (ascent === undefined) {
+        textMetrics.font = font;
+        const localBaseline = Math.ceil(textMetrics.measureText(text).actualBoundingBoxAscent + 2) + fraction / scale;
+        textCanvas.width = width;
+        textCanvas.height = Math.ceil((localBaseline + parseFloat(style.fontSize) + 2) * scale);
+        textMetrics.setTransform(scale, 0, 0, scale, 0, 0);
+        textMetrics.font = font; textMetrics.textBaseline = "alphabetic"; textMetrics.fillStyle = "#fff";
+        textMetrics.fillText(text, xFraction / scale, localBaseline);
+        // Font outlines still differ from painted pixels because of hinting.
+        // Scan the actual raster, ignoring nearly transparent antialias fringes.
+        const pixels = textMetrics.getImageData(0, 0, width, textCanvas.height).data;
+        let first = 0;
+        while (first < width * textCanvas.height && pixels[first * 4 + 3] < 64) first++;
+        ascent = first < width * textCanvas.height ? localBaseline - Math.floor(first / width) / scale : 0;
+        if (inkAscents.size >= 512) inkAscents.clear();
+        inkAscents.set(key, ascent);
+      }
+      const opticalY = parseFloat(getComputedStyle(slot).getPropertyValue("--harness-icon-optical-y")) || 0;
+      const top = baseline - ascent + opticalY;
+      // Snap the final optical position too, so fractional display scaling does
+      // not blur pixel-art marks or shift their first visible row unpredictably.
+      return Math.round(top * scale) / scale - slot.getBoundingClientRect().top;
+    });
+    entries.forEach(({ marker, slot }, index) => {
+      marker.remove(); slot.style.setProperty("--harness-icon-top", offsets[index] + "px");
+    });
+  }
+  function scheduleIconAlignment() {
+    cancelAnimationFrame(alignmentFrame);
+    alignmentFrame = requestAnimationFrame(alignIconTops);
+  }
+  window.addEventListener("resize", scheduleIconAlignment);
+  groups.addEventListener("toggle", scheduleIconAlignment, true);
+  document.fonts.ready.then(scheduleIconAlignment);
+  document.fonts.addEventListener("loadingdone", () => { inkAscents.clear(); scheduleIconAlignment(); });
+  const fontChanges = new MutationObserver(scheduleIconAlignment);
+  for (const node of [document.documentElement, document.body]) fontChanges.observe(node, { attributes: true, attributeFilter: ["class", "style"] });
+  fontChanges.observe(document.head, { childList: true, characterData: true, subtree: true });
   function render() {
     notice();
     if (!state) return;
@@ -84,35 +166,42 @@
     const focusKey = document.activeElement?.dataset.key;
     const scroll = firstRender && Number.isFinite(saved.scrollTop) ? Math.max(0, saved.scrollTop) : window.scrollY;
     firstRender = false;
+    const compact = state.density === "compact";
+    document.body.dataset.density = compact ? "compact" : "comfortable";
     const fragment = document.createDocumentFragment();
     for (const group of state.groups) {
       const section = document.createElement("details");
       section.className = "group"; section.dataset.scope = group.scope; section.open = showingSearch || !collapsed[group.scope];
       const summary = document.createElement("summary");
-      summary.textContent = group.label;
+      summary.append(svg("group-chevron", '<path d="m4.5 6 3.5 3.5L11.5 6"/>'));
+      const label = document.createElement("span"); label.className = "group-label"; label.textContent = group.label;
       const count = document.createElement("span"); count.className = "group-count"; count.textContent = String(group.total);
-      summary.append(count); section.append(summary);
+      summary.append(label, count); section.append(summary);
       section.addEventListener("toggle", () => { if (section.isConnected && !showingSearch) { collapsed[group.scope] = !section.open; save(); } });
       for (const row of group.sessions) {
         const card = document.createElement("article");
         card.className = "session-card"; card.classList.toggle("is-starred", row.starred); card.dataset.uid = row.uid;
+        card.title = row.title + "\n" + row.harnessLabel + " · " + row.recency;
         card.dataset.vscodeContext = JSON.stringify({ webviewSection: "session", sessionUid: row.uid, sessionStarred: row.starred, preventDefaultContextMenuItems: true });
-        const title = button("open", row.title, row.uid + ":open", { uid: row.uid });
-        title.className = "session-title"; title.title = row.title; title.setAttribute("aria-label", "Open session: " + row.title);
-        const meta = document.createElement("div"); meta.className = "session-meta";
+        const iconSlot = document.createElement("span");
+        iconSlot.className = "harness-icon-slot"; iconSlot.dataset.harness = row.harness; iconSlot.setAttribute("aria-hidden", "true");
         for (const theme of ["light", "dark"]) {
           const icon = document.createElement("img");
-          icon.className = "harness-icon icon-" + theme; icon.src = row.icons[theme]; icon.alt = ""; icon.setAttribute("aria-hidden", "true"); meta.append(icon);
+          icon.className = "harness-icon icon-" + theme; icon.src = row.icons[theme]; icon.alt = ""; iconSlot.append(icon);
         }
-        const info = document.createElement("span"); info.className = "session-info";
-        info.textContent = row.harnessLabel + " · " + row.recency; info.title = info.textContent; meta.append(info);
-        const star = button("star", row.starred ? "★" : "☆", row.uid + ":star", { uid: row.uid, starred: !row.starred });
+        card.append(iconSlot);
+        const title = button("open", row.title, row.uid + ":open", { uid: row.uid });
+        title.className = "session-title"; title.setAttribute("aria-label", "Open session: " + row.title + ", " + row.harnessLabel + ", " + row.recency);
+        const time = document.createElement("time"); time.className = "session-time"; time.textContent = compact ? compactRecency(row.recency) : row.recency;
+        const star = button("star", "", row.uid + ":star", { uid: row.uid, starred: !row.starred });
         star.className = "star-button"; star.title = row.starred ? "Unstar session" : "Star session";
-        star.setAttribute("aria-label", star.title + ": " + row.title); star.setAttribute("aria-pressed", String(row.starred)); meta.append(star);
+        star.append(svg("", '<path d="M8 1.8l1.85 3.95 4.3.5-3.18 2.95.84 4.25L8 11.3l-3.81 2.15.84-4.25L1.85 6.25l4.3-.5z"/>'));
+        star.setAttribute("aria-label", star.title + ": " + row.title); star.setAttribute("aria-pressed", String(row.starred));
+        card.append(title, time, star);
         card.addEventListener("click", event => {
           if (event.button === 0 && !event.target.closest("button")) title.click();
         });
-        card.append(title, meta); section.append(card);
+        section.append(card);
       }
       if (!group.total) { const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = showingSearch ? "No matching sessions" : "No sessions yet"; section.append(empty); }
       if (group.sessions.length < group.total) {
@@ -122,6 +211,7 @@
       fragment.append(section);
     }
     groups.replaceChildren(fragment);
+    alignIconTops();
     if (focusKey) Array.from(groups.querySelectorAll("button")).find(b => b.dataset.key === focusKey)?.focus({ preventScroll: true });
     window.scrollTo(0, scroll);
   }
@@ -151,6 +241,7 @@
     }
   });
   window.addEventListener("pagehide", () => {
+    cancelAnimationFrame(alignmentFrame); fontChanges.disconnect();
     clearTimeout(searchTimer); searchVersion++;
     for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error("The sidebar was closed")); }
     pending.clear();

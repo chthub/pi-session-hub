@@ -9,11 +9,14 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 const media = path.resolve(import.meta.dirname, "../vscode-extension/media");
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "hub-sidebar-browser-"));
-let server, chrome, socket;
+let server, chrome, socket, alignmentScreenshot;
 let checks = 0;
 const check = (name, value) => { assert.ok(value, name); console.log(`PASS ${name}`); checks++; };
 try {
   server = http.createServer((req, res) => {
+    if (/^\/alignment-check-\d+\.png$/.test(req.url) && alignmentScreenshot) {
+      res.setHeader("Content-Type", "image/png"); res.setHeader("Cache-Control", "no-store"); res.end(alignmentScreenshot); return;
+    }
     if (req.url === "/") {
       const html = fs.readFileSync(path.join(media, "sidebar.html"), "utf8")
         .replaceAll("{{nonce}}", "synthetic-sidebar-nonce").replaceAll("{{cspSource}}", "'self'")
@@ -21,7 +24,7 @@ try {
       res.setHeader("Content-Type", "text/html; charset=utf-8"); res.end(html); return;
     }
     const file = req.url?.slice(1);
-    if (!file || !/^(sidebar\.(css|js)|harness\/(light|dark)\/(pi|codex)\.svg)$/.test(file)) { res.writeHead(404); res.end(); return; }
+    if (!file || !/^(sidebar\.(css|js)|harness\/(light|dark)\/(pi|claude-code|codex|opencode|crush|jcode)\.svg)$/.test(file)) { res.writeHead(404); res.end(); return; }
     res.setHeader("Content-Type", file.endsWith("css") ? "text/css" : file.endsWith("js") ? "text/javascript" : "image/svg+xml");
     res.end(fs.readFileSync(path.join(media, file)));
   });
@@ -64,7 +67,13 @@ try {
   await cdp("Emulation.setDeviceMetricsOverride", { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
   await cdp("Page.addScriptToEvaluateOnNewDocument", { source: `
     window.requests = []; window.savedState = JSON.parse(sessionStorage.getItem('sidebar-state') || '{}'); window.failNextStar = false;
-    const rows = Array.from({length:205}, (_, i) => ({uid:'pi:row-'+i, title:i === 0 ? '修复会话索引与大文件读取 <img src=x onerror="window.injected=true"> 中文标题与超长标识符_identifier_'.repeat(4) : '第'+i+'条会话：检查实现并解释结果', harness:'pi', harnessLabel:'Pi', recency:'3 minutes ago', starred:false, icons:{light:${JSON.stringify(origin + "/harness/light/pi.svg")},dark:${JSON.stringify(origin + "/harness/dark/pi.svg")}}}));
+    const harnesses = ['pi','claude-code','codex','opencode','crush','jcode'];
+    const labels = ['Pi','Claude Code','Codex','OpenCode','Crush','Jcode'];
+    const rows = Array.from({length:205}, (_, i) => {
+      const harness=harnesses[i%harnesses.length];
+      return {uid:'pi:row-'+i, title:i === 0 ? '修复会话索引与大文件读取 <img src=x onerror="window.injected=true"> 中文标题与超长标识符_identifier_'.repeat(4) : '第'+i+'条会话：检查实现并解释结果', harness, harnessLabel:labels[i%labels.length], recency:'3 minutes ago', starred:false,
+        icons:{light:${JSON.stringify(origin)}+'/harness/light/'+harness+'.svg',dark:${JSON.stringify(origin)}+'/harness/dark/'+harness+'.svg'}};
+    });
     let limit = 100, searchQuery = {text:'', searchScope:'user'}, searchOpen=sessionStorage.getItem('host-search-open')==='true';
     const send = data => window.dispatchEvent(new MessageEvent('message',{data}));
     function publish() {
@@ -72,8 +81,9 @@ try {
         searchQuery.text==='userneedle'&&i===0 || searchQuery.text==='assistantneedle'&&searchQuery.searchScope!=='user'&&i===1 ||
         searchQuery.text==='toolneedle'&&searchQuery.searchScope==='all'&&i===2);
       const ordered=matches.filter(row=>row.starred).concat(matches.filter(row=>!row.starred));
-      send({type:'sessionHub.sidebar.state',search:{...searchQuery},searchOpen,status:'',groups:[{scope:'current',label:'Current Project',total:matches.length,sessions:ordered.slice(0,limit)},{scope:'unscoped',label:'Unassigned',total:0,sessions:[]},{scope:'other',label:'Other Projects',total:0,sessions:[]}]});
+      send({type:'sessionHub.sidebar.state',search:{...searchQuery},searchOpen,density:window.sidebarDensity,status:'',groups:[{scope:'current',label:'Current Project',total:matches.length,sessions:ordered.slice(0,limit)},{scope:'unscoped',label:'Unassigned',total:0,sessions:[]},{scope:'other',label:'Other Projects',total:0,sessions:[]}]});
     }
+    window.sidebarDensity='comfortable'; window.publishSidebar=()=>publish();
     window.toggleSidebarSearch=()=>{searchOpen=!searchOpen;sessionStorage.setItem('host-search-open',String(searchOpen));if(!searchOpen){searchQuery.text='';limit=100;}publish();};
     window.acquireVsCodeApi = () => ({getState:()=>window.savedState,setState:value=>{window.savedState=structuredClone(value);sessionStorage.setItem('sidebar-state',JSON.stringify(value));},postMessage:request=>{
       window.requests.push(request);
@@ -91,57 +101,142 @@ try {
   await cdp("Page.navigate", { url: origin + "/" });
   await wait('document.querySelectorAll(".session-card").length === 100');
   check("search controls are collapsed by default without leaving layout space", await evaluate(`document.querySelector('#search-panel').hidden && document.querySelector('#search-panel').getClientRects().length===0 && document.documentElement.lang==='en'`));
-  check("sidebar initially renders bounded two-line cards with a persistent second-row star button", await evaluate(`(() => {
-    const card=document.querySelector('.session-card'), title=card.querySelector('.session-title'), meta=card.querySelector('.session-meta'), star=card.querySelector('.star-button');
-    const a=title.getBoundingClientRect(), b=meta.getBoundingClientRect(), c=star.getBoundingClientRect();
-    return card.children.length===2 && b.top>=a.bottom && c.top>=b.top && c.bottom<=b.bottom && star.getAttribute('aria-pressed')==='false' && !star.hidden;
+  check("comfortable rows: full-width title, time beneath it, hover-revealed star on the time line", await evaluate(`(() => {
+    const card=document.querySelector('.session-card'), title=card.querySelector('.session-title'), time=card.querySelector('.session-time'), star=card.querySelector('.star-button');
+    const a=title.getBoundingClientRect(), b=time.getBoundingClientRect(), c=star.getBoundingClientRect(), h=card.getBoundingClientRect().height;
+    return document.body.dataset.density==='comfortable' && h>=44 && h<=56 && b.top>=a.bottom && c.left>=b.left && Math.abs(a.right-c.right)<1 &&
+      time.textContent==='3 minutes ago' && star.getAttribute('aria-pressed')==='false' && getComputedStyle(star).opacity==='0';
   })()`));
+  await evaluate(`window.sidebarDensity='compact';window.publishSidebar()`);
+  await wait(`document.body.dataset.density==='compact'`);
+  check("compact setting switches to one 24px line with a short time label", await evaluate(`(() => {
+    const card=document.querySelector('.session-card'), title=card.querySelector('.session-title'), time=card.querySelector('.session-time'), star=card.querySelector('.star-button');
+    const a=title.getBoundingClientRect(), b=time.getBoundingClientRect(), c=star.getBoundingClientRect();
+    return card.getBoundingClientRect().height===24 && a.right<=b.left && b.right<=c.left && time.textContent==='3m' && card.title.includes('3 minutes ago');
+  })()`));
+  await evaluate(`window.sidebarDensity='comfortable';window.publishSidebar()`);
+  await wait(`document.body.dataset.density==='comfortable'`);
   for (const theme of ["light", "dark"]) {
-    const svg = fs.readFileSync(path.join(media, "harness", theme, "pi.svg"), "utf8");
-    check(`${theme} Pi glyph is optically centered in its SVG viewport`, await evaluate(`(() => {
-      const svg=new DOMParser().parseFromString(${JSON.stringify(svg)},'image/svg+xml').documentElement;
-      svg.style.cssText='position:absolute;width:16px;height:16px;visibility:hidden';document.body.append(svg);
-      const path=svg.querySelector('path'), box=path.getBBox(), center=svg.createSVGPoint();
-      center.x=box.x+box.width/2;center.y=box.y+box.height/2;
-      const point=center.matrixTransform(path.getCTM());svg.remove();
-      return Math.abs(point.x-8)<0.01 && Math.abs(point.y-8)<0.01;
-    })()`));
+    for (const harness of ["pi", "claude-code", "codex", "opencode", "crush", "jcode"]) {
+      const source = fs.readFileSync(path.join(media, "harness", theme, harness + ".svg"), "utf8");
+      check(`${theme} ${harness}: self-contained SVG artwork fits its original viewBox and loads at 16px`, await evaluate(`(async () => {
+        const doc=new DOMParser().parseFromString(${JSON.stringify(source)},'image/svg+xml');
+        if(doc.querySelector('parsererror, script, foreignObject, image, use, style')) return false;
+        const svg=doc.documentElement;
+        if(svg.localName!=='svg' || Array.from(svg.querySelectorAll('*')).concat(svg).some(node=>Array.from(node.attributes).some(attr=>/^on/i.test(attr.name) || /href$/i.test(attr.name) || /url\\(\\s*[^#]/i.test(attr.value)))) return false;
+        svg.style.cssText='position:absolute;width:16px;height:16px;visibility:hidden';document.body.append(svg);
+        const box=svg.getBBox(), view=svg.viewBox.baseVal;
+        const fits=view.width>0 && view.height>0 && box.width>0 && box.height>0 && box.x>=view.x-0.1 && box.y>=view.y-0.1 && box.x+box.width<=view.x+view.width+0.1 && box.y+box.height<=view.y+view.height+0.1;
+        svg.remove();
+        const image=new Image(16,16);
+        const loaded=await new Promise(resolve=>{image.onload=()=>resolve(image.naturalWidth>0 && image.naturalHeight>0);image.onerror=()=>resolve(false);image.src=${JSON.stringify(origin + "/harness/" + theme + "/" + harness + ".svg")};});
+        return fits && loaded;
+      })()`));
+    }
   }
   check("session text remains literal and cannot inject HTML or scripts", await evaluate(`!window.injected && document.querySelector('.session-title').textContent.includes('<img') && !document.querySelector('.session-card img[src="x"]')`));
   for (const width of [220, 320, 480]) {
     await cdp("Emulation.setDeviceMetricsOverride", { width, height: 700, deviceScaleFactor: 1, mobile: false });
-    check(`${width}px sidebar: title uses the complete first row, metadata/star stay on second, no horizontal overflow`, await evaluate(`(() => {
-      const card=document.querySelector('.session-card'), title=card.querySelector('.session-title'), star=card.querySelector('.star-button'), meta=card.querySelector('.session-meta');
-      const css=getComputedStyle(card), a=title.getBoundingClientRect(), b=card.getBoundingClientRect(), c=star.getBoundingClientRect();
-      return Math.abs(a.width-(card.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight)))<1 &&
-        c.right<=b.right && c.bottom<=meta.getBoundingClientRect().bottom && a.height===24 && card.getBoundingClientRect().height>=58 &&
+    check(`${width}px sidebar: title spans the row, star stays inside, no horizontal overflow`, await evaluate(`(() => {
+      const card=document.querySelector('.session-card'), title=card.querySelector('.session-title'), star=card.querySelector('.star-button');
+      const a=title.getBoundingClientRect(), b=card.getBoundingClientRect(), c=star.getBoundingClientRect();
+      return a.width>40 && Math.abs(a.right-c.right)<1 && c.right<=b.right && b.height<=56 &&
         document.documentElement.scrollWidth<=innerWidth && getComputedStyle(title).textOverflow==='ellipsis';
     })()`));
   }
   for (const theme of ["vscode-light", "vscode-dark", "vscode-high-contrast", "vscode-high-contrast-light"]) {
     await evaluate(`document.body.className=${JSON.stringify(theme)}`);
-    check(`${theme}: harness icon, metadata and star share one vertical center and align with the title inset`, await evaluate(`(() => {
-      const card=document.querySelector('.session-card'), title=card.querySelector('.session-title');
-      const icon=Array.from(card.querySelectorAll('.harness-icon')).find(img=>getComputedStyle(img).display!=='none');
-      const a=icon.getBoundingClientRect(), b=card.querySelector('.session-info').getBoundingClientRect(), c=card.querySelector('.star-button').getBoundingClientRect();
-      return Math.abs(a.top+a.height/2-b.top-b.height/2)<0.1 && Math.abs(a.top+a.height/2-c.top-c.height/2)<0.1 &&
-        Math.abs(a.left-title.getBoundingClientRect().left-parseFloat(getComputedStyle(title).paddingLeft))<0.1 &&
-        getComputedStyle(card.querySelector('.session-info')).lineHeight==='16px';
+    check(`${theme}: icon aligns to the title's text top, star centers on the time line, time aligns with the title`, await evaluate(`(() => {
+      const card=document.querySelector('.session-card'), mid=el=>{const r=el.getBoundingClientRect();return r.top+r.height/2;};
+      const icon=Array.from(card.querySelectorAll('.harness-icon')).filter(img=>getComputedStyle(img).display!=='none');
+      const title=card.querySelector('.session-title'), time=card.querySelector('.session-time');
+      return icon.length===1 && Number.isFinite(parseFloat(card.querySelector('.harness-icon-slot').style.getPropertyValue('--harness-icon-top'))) && Math.abs(mid(card.querySelector('.star-button'))-mid(time))<0.6 &&
+        Math.abs(time.getBoundingClientRect().left-title.getBoundingClientRect().left)<0.5;
     })()`));
+  }
+  for (const density of ["comfortable", "compact"]) {
+    await evaluate(`window.sidebarDensity=${JSON.stringify(density)};window.publishSidebar()`);
+    for (const theme of ["vscode-light", "vscode-dark", "vscode-high-contrast", "vscode-high-contrast-light"]) {
+      await evaluate(`document.body.className=${JSON.stringify(theme)}`);
+      await wait(`Array.from(document.querySelectorAll('.session-card')).slice(0,6).every(card=>Array.from(card.querySelectorAll('.harness-icon')).filter(img=>getComputedStyle(img).display!=='none').every(img=>img.complete && img.naturalWidth>0))`);
+      check(`${density} ${theme}: six brands share an icon slot, title inset and a 1px optical offset from the measured text top`, await evaluate(`(() => {
+        const cards=Array.from(document.querySelectorAll('.session-card')).slice(0,6);
+        const titles=cards.map(card=>card.querySelector('.session-title').getBoundingClientRect());
+        return new Set(cards.map(card=>card.querySelector('.harness-icon-slot').dataset.harness)).size===6 && cards.every((card,i)=>{
+          const slot=card.querySelector('.harness-icon-slot'), r=slot.getBoundingClientRect(), title=titles[i];
+          const icons=Array.from(slot.querySelectorAll('.harness-icon')).filter(img=>getComputedStyle(img).display!=='none');
+          if(icons.length!==1) return false;
+          const icon=icons[0].getBoundingClientRect(), expected=['pi','opencode'].includes(slot.dataset.harness)?14:16;
+          const inkTop=parseFloat(slot.style.getPropertyValue('--harness-icon-top'));
+          return Number.isFinite(inkTop) && r.width===16 && r.height===20 && icon.width===expected && icon.height===expected &&
+            Math.abs(r.left+r.width/2-icon.left-icon.width/2)<0.1 &&
+            parseFloat(getComputedStyle(slot).getPropertyValue('--harness-icon-optical-y'))===1 &&
+            Math.abs(icon.top-r.top-inkTop)<0.1 &&
+            Math.abs(title.left-titles[0].left)<0.1 &&
+            (document.body.dataset.density!=='comfortable' || Math.abs(card.querySelector('.session-time').getBoundingClientRect().left-title.left)<0.1);
+        });
+      })()`));
+    }
+  }
+  // Compare painted pixels, not DOM boxes or the implementation's font metrics.
+  // This catches the em-box/font-ink mismatch seen in real VS Code screenshots.
+  let pixelCheck = 0;
+  await cdp("Emulation.setDeviceMetricsOverride", { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
+  for (const pixelRatio of [1, 1.25, 1.5, 2]) {
+    await cdp("Emulation.setDeviceMetricsOverride", { width: 320, height: 700, deviceScaleFactor: pixelRatio, mobile: false });
+    for (const density of ["comfortable", "compact"]) {
+      for (const fontSize of [11, 13, 16]) {
+      await evaluate(`(async () => {window.sidebarDensity=${JSON.stringify(density)};window.publishSidebar();document.body.className='vscode-dark';document.body.style.setProperty('--vscode-font-size',${JSON.stringify(fontSize + "px")});document.body.style.setProperty('--vscode-sideBar-background','#252526');document.body.style.setProperty('--vscode-sideBar-foreground','#cccccc');Array.from(document.querySelectorAll('.session-title')).slice(0,6).forEach((title,i)=>{title.textContent=['Demo示例任务已完成','lowercase only','UPPER CASE','字体顶部对齐','Áccent title','示例标题 Demo'][i];});window.scrollTo(0,0);window.dispatchEvent(new Event('resize'));await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))})()`);
+      const shot = await cdp("Page.captureScreenshot", { format: "png" });
+      alignmentScreenshot = Buffer.from(shot.data, "base64");
+      const offsets = await evaluate(`(async () => {
+        const image=new Image();await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject;image.src=${JSON.stringify(origin + "/alignment-check-") }+${pixelCheck++}+'.png';});
+        const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+        const context=canvas.getContext('2d');context.drawImage(image,0,0);
+        const {data,width,height}=context.getImageData(0,0,canvas.width,canvas.height);
+        const scale=window.devicePixelRatio;
+        const firstInkY=rect=>{
+          for(let y=Math.max(0,Math.floor(rect.top*scale));y<Math.min(height,Math.ceil(rect.bottom*scale));y++){
+            for(let x=Math.max(0,Math.ceil(rect.left*scale));x<Math.min(width,Math.floor(rect.right*scale));x++){
+              const i=(y*width+x)*4;
+              if(Math.max(Math.abs(data[i]-37),Math.abs(data[i+1]-37),Math.abs(data[i+2]-38))>48) return y;
+            }
+          }
+          return null;
+        };
+        return Array.from(document.querySelectorAll('.session-card')).slice(0,6).map(card=>{
+          const icon=Array.from(card.querySelectorAll('.harness-icon')).find(img=>getComputedStyle(img).display!=='none');
+          const iconY=firstInkY(icon.getBoundingClientRect()), textY=firstInkY(card.querySelector('.session-title').getBoundingClientRect());
+          return {harness:card.querySelector('.harness-icon-slot').dataset.harness,iconY,textY};
+        });
+      })()`);
+      check(`${density} ${fontSize}px DPR ${pixelRatio}: screenshot ink tops retain the 1 CSS px optical offset within 1 CSS px raster tolerance for six marks and mixed/CJK/Latin/accent titles: ${JSON.stringify(offsets)}`,
+        offsets.every(({iconY,textY})=>iconY!==null && textY!==null && Math.abs(iconY-textY-pixelRatio)<=Math.max(1,pixelRatio)));
+      }
+    }
+  }
+  await cdp("Emulation.setDeviceMetricsOverride", { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
+  await evaluate(`document.body.style.removeProperty('--vscode-font-size');document.body.style.removeProperty('--vscode-sideBar-background');document.body.style.removeProperty('--vscode-sideBar-foreground');window.sidebarDensity='comfortable';window.publishSidebar()`);
+  if (process.env.SIDEBAR_ICON_SCREENSHOT) {
+    await cdp("Emulation.setDeviceMetricsOverride", { width: 320, height: 400, deviceScaleFactor: 2, mobile: false });
+    await evaluate(`(async () => {document.body.className='vscode-dark';Array.from(document.querySelectorAll('.session-card')).slice(0,6).forEach(card=>{card.querySelector('.session-title').textContent='Demo示例任务已完成 · '+card.querySelector('.harness-icon-slot').dataset.harness;});window.scrollTo(0,0);window.dispatchEvent(new Event('resize'));await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))})()`);
+    const shot = await cdp("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 22, width: 320, height: 324, scale: 1 } });
+    fs.writeFileSync(process.env.SIDEBAR_ICON_SCREENSHOT, Buffer.from(shot.data, "base64"));
+    await cdp("Emulation.setDeviceMetricsOverride", { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
+    await evaluate(`window.publishSidebar()`);
   }
   await evaluate(`document.querySelector('.star-button').click()`);
   await wait(`document.querySelector('.session-card').classList.contains('is-starred') && !document.querySelector('.star-button').disabled`);
-  check("star click highlights the card without opening the conversation", await evaluate(`document.querySelector('.star-button').getAttribute('aria-pressed')==='true' && document.querySelector('.star-button').textContent==='★' && !window.requests.some(r=>r.action==='open')`));
+  check("star click highlights the card without opening the conversation", await evaluate(`document.querySelector('.star-button').getAttribute('aria-pressed')==='true' && getComputedStyle(document.querySelector('.star-button svg')).fill!=='none' && getComputedStyle(document.querySelector('.star-button')).opacity==='1' && !window.requests.some(r=>r.action==='open')`));
   for (const theme of ["vscode-light", "vscode-dark", "vscode-high-contrast", "vscode-high-contrast-light"]) {
     await evaluate(`document.body.className=${JSON.stringify(theme)}`);
-    check(`${theme}: highlighted title and card differ from normal rows`, await evaluate(`(() => {
-      const cards=document.querySelectorAll('.session-card');
-      return getComputedStyle(cards[0].querySelector('.session-title')).color!==getComputedStyle(cards[1].querySelector('.session-title')).color &&
-        getComputedStyle(cards[0]).backgroundColor!==getComputedStyle(cards[1]).backgroundColor;
+    check(`${theme}: starred rows keep a visible, colored star while normal rows hide theirs`, await evaluate(`(() => {
+      const cards=document.querySelectorAll('.session-card'), a=getComputedStyle(cards[0].querySelector('.star-button')), b=getComputedStyle(cards[1].querySelector('.star-button'));
+      return a.color!==b.color && a.opacity==='1' && b.opacity==='0';
     })()`));
   }
   await evaluate(`document.body.style.setProperty('--vscode-sessionHub-starredForeground','#ff00ff')`);
-  check("VS Code custom star color also controls the two-line card", await evaluate(`getComputedStyle(document.querySelector('.session-title')).color==='rgb(255, 0, 255)'`));
+  check("VS Code custom star color also controls the starred row", await evaluate(`getComputedStyle(document.querySelector('.star-button')).color==='rgb(255, 0, 255)'`));
   await evaluate(`window.failNextStar=true;document.querySelector('.star-button').click()`);
   await wait(`document.querySelector('#status').textContent==='Simulated save failure' && !document.querySelector('.star-button').disabled`);
   check("save failure keeps the highlighted state and presents a visible error", await evaluate(`document.querySelector('.session-card').classList.contains('is-starred') && document.querySelector('#status').classList.contains('error')`));
@@ -155,9 +250,9 @@ try {
   await wait(`window.requests.some(r=>r.action==='open'&&r.uid==='pi:row-0')`);
   check("title click opens the correct conversation independently of starring", true);
   await wait(`!document.querySelector('.session-title').disabled`);
-  await evaluate(`window.openCount=window.requests.filter(r=>r.action==='open').length;document.querySelector('.session-meta').click()`);
+  await evaluate(`window.openCount=window.requests.filter(r=>r.action==='open').length;document.querySelector('.session-time').click()`);
   await wait(`window.requests.filter(r=>r.action==='open').length===window.openCount+1 && !document.querySelector('.session-title').disabled`);
-  check("second-row metadata and blank area open the conversation exactly once", await evaluate(`window.requests.at(-1).uid==='pi:row-0'`));
+  check("time label and blank area open the conversation exactly once", await evaluate(`window.requests.at(-1).uid==='pi:row-0'`));
   const padding = await evaluate(`(() => {window.openCount=window.requests.filter(r=>r.action==='open').length;const r=document.querySelector('.session-card').getBoundingClientRect();return {x:r.left+2,y:r.top+2};})()`);
   await cdp('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...padding});
   await cdp('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...padding});

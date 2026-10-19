@@ -65,49 +65,101 @@ button:disabled { cursor: wait; opacity: .65; }
 #status { margin: 8px 10px; overflow-wrap: anywhere; }
 #status:empty { display: none; }
 #status.error { color: var(--vscode-errorForeground, #c43c39); }
+/* ---- Session list: native-density rows, one session per line ---- */
+:root { --row-height: 24px; --indent: 20px; }
 .group { min-width: 0; }
 .group > summary {
-  padding: 5px 8px; position: sticky; top: 0; z-index: 1;
-  background: var(--surface); font-weight: 600; overflow-wrap: anywhere;
+  display: flex; align-items: center; gap: 4px;
+  height: 22px; padding: 0 8px 0 4px; position: sticky; top: 0; z-index: 1;
+  list-style: none; background: var(--surface);
+  font-weight: 600;
+  color: var(--vscode-sideBarSectionHeader-foreground, var(--foreground));
+  user-select: none;
 }
-.group-count { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.group > summary::-webkit-details-marker { display: none; }
+.group > summary:hover { background: var(--hover); }
+.group-chevron { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.3; transition: transform .1s; }
+.group:not([open]) > summary .group-chevron { transform: rotate(-90deg); }
+.group-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-count {
+  flex: none; min-width: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--vscode-badge-background, var(--hover)); color: var(--vscode-badge-foreground, var(--foreground));
+  font-size: 10px; font-weight: 600; line-height: 16px; text-align: center;
+}
 .session-card {
-  margin: 4px 6px; padding: 4px 6px;
-  border: 1px solid var(--border); border-left: 3px solid var(--border);
-  border-radius: 4px; min-width: 0; overflow-wrap: anywhere; cursor: pointer;
+  display: grid; align-items: center; column-gap: 8px;
+  min-width: 0; cursor: pointer;
+  border: 1px solid transparent; /* reserved for high-contrast focus/hover outlines */
 }
+/* Comfortable (default): title on the first line, time beneath it, star centered on the right. */
+.session-card {
+  grid-template-columns: 16px minmax(0, 1fr) 20px;
+  grid-template-areas: "icon title title" ".    time  star";
+  row-gap: 1px; padding: 5px 6px 6px var(--indent);
+}
+.session-card .harness-icon-slot { grid-area: icon; }
+.session-card .session-title { grid-area: title; line-height: 20px; }
+.session-card .session-time { grid-area: time; justify-self: start; font-size: 12px; }
+.session-card .star-button { grid-area: star; }
+/* Compact: one Explorer-height line per session. */
+body[data-density="compact"] .session-card {
+  grid-template-columns: 16px minmax(0, 1fr) auto 20px;
+  grid-template-areas: "icon title time star";
+  column-gap: 6px; height: var(--row-height); padding: 0 4px 0 var(--indent);
+}
+body[data-density="compact"] .session-title { line-height: 22px; }
+body[data-density="compact"] .session-time { justify-self: end; font-size: 11px; }
 .session-card:hover { background: var(--hover); }
 .session-card:focus-within { outline: 1px solid var(--focus); outline-offset: -1px; }
-.session-title {
-  display: block; width: 100%; min-width: 0; padding: 0 2px;
-  text-align: left; border: 0; background: transparent;
-  line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+/* JS measures the actual title glyph top from its baseline and Canvas metrics.
+   Do not substitute line-box/em-box geometry: fonts have different ink ascents.
+   Add 1px below that measured top for optical balance with the text body.
+   Translating artwork leaves row height, title inset and time position unchanged. */
+.harness-icon-slot {
+  display: grid; place-items: start center; width: 16px; height: 20px;
+  --harness-icon-size: 16px;
+  --harness-icon-top: 3px;
+  --harness-icon-optical-y: 1px;
 }
-.session-meta { display: flex; gap: 6px; align-items: center; height: 26px; min-width: 0; padding: 0 2px; line-height: 16px; }
-.session-info {
-  flex: 1; min-width: 0; color: var(--muted); font-size: 11px; line-height: 16px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.title-baseline {
+  display: inline-block; width: 0; height: 0; padding: 0; margin: 0;
+  vertical-align: baseline;
 }
-.harness-icon { display: block; width: 14px; height: 14px; flex: none; }
+.harness-icon-slot[data-harness="pi"],
+.harness-icon-slot[data-harness="opencode"] { --harness-icon-size: 14px; }
+.harness-icon {
+  display: block; width: var(--harness-icon-size); height: var(--harness-icon-size);
+  object-fit: contain;
+  transform: translateY(var(--harness-icon-top));
+}
 .icon-dark { display: none; }
 body.vscode-dark .icon-dark, body.vscode-high-contrast .icon-dark, :root[data-theme="dark"] .icon-dark { display: block; }
 body.vscode-dark .icon-light, body.vscode-high-contrast .icon-light, :root[data-theme="dark"] .icon-light { display: none; }
+.session-title {
+  min-width: 0; padding: 0; border: 0; background: transparent;
+  text-align: left; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.session-title:focus-visible { outline: none; } /* the row draws the focus ring */
+.session-time {
+  min-width: 0; color: var(--muted); line-height: 16px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .star-button {
-  flex: none; width: 30px; height: 26px; padding: 0;
-  border: 1px solid transparent; border-radius: 3px;
-  background: transparent; color: var(--muted); font-size: 19px; line-height: 22px;
+  display: grid; place-items: center;
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px;
+  background: transparent; color: var(--muted);
 }
-.star-button:hover { color: var(--star); border-color: var(--star); }
-.session-card.is-starred {
-  border-left-color: var(--star);
-  background: color-mix(in srgb, var(--star) 10%, var(--surface));
-}
-.session-card.is-starred:hover { background: color-mix(in srgb, var(--star) 16%, var(--surface)); }
-.is-starred .session-title, .is-starred .star-button { color: var(--star); }
+.star-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linejoin: round; }
+.star-button:hover { color: var(--foreground); background: var(--vscode-toolbar-hoverBackground, var(--hover)); }
+/* Unstarred rows only reveal the star on hover or keyboard focus, like VS Code inline actions. */
+.session-card:not(:hover):not(:focus-within) .star-button[aria-pressed="false"] { opacity: 0; }
+.session-card.is-starred .star-button { color: var(--star); }
+.session-card.is-starred .star-button svg { fill: currentColor; }
 .more {
-  display: block; width: calc(100% - 12px); margin: 5px 6px 8px; padding: 4px;
-  border: 1px solid var(--border); border-radius: 3px; background: var(--hover);
+  display: block; width: 100%; height: var(--row-height); margin: 0; padding: 0 8px 0 calc(var(--indent) + 22px);
+  border: 0; background: transparent; text-align: left;
+  color: var(--vscode-textLink-foreground, var(--focus)); font-size: 12px;
 }
-.empty { padding: 4px 10px; color: var(--muted); overflow-wrap: anywhere; }
-body.vscode-high-contrast .session-card, body.vscode-high-contrast-light .session-card { border-color: var(--vscode-contrastBorder, var(--foreground)); }
-body.vscode-high-contrast .is-starred, body.vscode-high-contrast-light .is-starred { border-color: var(--star); }
+.more:hover { text-decoration: underline; }
+.empty { height: var(--row-height); padding: 0 8px 0 calc(var(--indent) + 22px); color: var(--muted); line-height: var(--row-height); }
+body.vscode-high-contrast .session-card:hover, body.vscode-high-contrast-light .session-card:hover { border: 1px dashed var(--vscode-contrastActiveBorder, var(--focus)); }

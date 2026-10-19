@@ -145,14 +145,18 @@ class TreeItem { constructor(label, collapsibleState) { this.label = label; this
 const commands = new Map(), panels = [], terminals = [], errors = [], settingUpdates = [], environmentPicks = [], confirmations = [];
 const openedFiles = [];
 const decorationProviders = new Set();
-let clipboard, tree, view, workspaceChanged, confirmation = "Resume in terminal", pickedProfile = "default", pickedTarget, pickedCwd, extension;
+let sidebarDensity = "comfortable", configurationChanged, clipboard, tree, view, workspaceChanged, confirmation = "Resume in terminal", pickedProfile = "default", pickedTarget, pickedCwd, extension;
 const newSessionPicks = [];
 const vscode = {
   Disposable, EventEmitter, Uri, TreeItem, ThemeIcon: class { constructor(id) { this.id = id; } },
   ThemeColor: class { constructor(id) { this.id = id; } },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, ViewColumn: { Active: -1 },
   workspace: { workspaceFolders: [{ uri: new Uri(project) }], onDidChangeWorkspaceFolders(callback) { workspaceChanged = callback; return new Disposable(); },
-    getConfiguration(section) { assert.equal(section, "workbench.editor"); return { async update(key, value, target) { settingUpdates.push({ key, value, target }); } }; } },
+    getConfiguration(section) {
+      if (section === "sessionHub.sidebar") return { get: key => key === "density" ? sidebarDensity : undefined };
+      assert.equal(section, "workbench.editor"); return { async update(key, value, target) { settingUpdates.push({ key, value, target }); } };
+    },
+    onDidChangeConfiguration(callback) { configurationChanged = callback; return new Disposable(); } },
   commands: { async executeCommand(name, uri) { assert.equal(name, "vscode.open"); openedFiles.push(uri); }, registerCommand(name, callback) { commands.set(name, callback); return new Disposable(() => commands.delete(name)); } },
   env: { clipboard: { async writeText(value) { clipboard = value; } } },
   window: {
@@ -252,6 +256,11 @@ try {
     sidebarState().searchOpen === false && sidebar.webview.html.includes('id="search-panel"') &&
     manifest.contributes.menus["view/title"].map(item => item.command).join() === "sessionHub.search,sessionHub.newSession,sessionHub.refresh" &&
     manifest.contributes.commands.find(item => item.command === "sessionHub.search").icon === "$(search)");
+  check("sidebar density defaults to comfortable and the setting is declared",
+    sidebarState().density === "comfortable" && manifest.contributes.configuration.properties["sessionHub.sidebar.density"].default === "comfortable");
+  sidebarDensity = "compact"; configurationChanged({ affectsConfiguration: key => key === "sessionHub.sidebar.density" });
+  check("changing the density setting republishes the sidebar immediately", sidebarState().density === "compact");
+  sidebarDensity = "comfortable"; configurationChanged({ affectsConfiguration: key => key === "sessionHub.sidebar.density" });
   await commands.get("sessionHub.search")();
   check("native search command opens the panel without opening an editor", sidebarState().searchOpen === true && sidebar.shown && panels.length === 0);
   await sidebarRequest("search", { text: "scopeuserneedle", searchScope: "user" });

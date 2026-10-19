@@ -37,7 +37,9 @@ npm run package --prefix vscode-extension
 code --install-extension vscode-extension/pi-session-hub-vscode-0.1.0.vsix --force
 ```
 
-点击卡片第二行始终可见的 **☆** 按钮，即可加星标：按钮变为 **★**，标题和左边框变为金黄色，整张卡片带淡金色背景。再次点击取消高亮。星标按钮不会打开正文或触发重新扫描，已有星标也会自动恢复高亮。按钮支持 Tab 聚焦和空格/Enter 操作。
+悬停会话或通过键盘聚焦时显示星标按钮；加星标后，彩色实心星标始终可见。再次点击取消星标。星标按钮不会打开正文或触发重新扫描，已有星标也会自动恢复。按钮支持 Tab 聚焦和空格/Enter 操作。
+
+`sessionHub.sidebar.density` 默认是 `comfortable`：标题一行、时间一行。选择 `compact` 则使用 24px 单行布局，时间缩写为 `3m`、`2d` 等；完整时间保留在悬停提示中。设置更改即时生效。
 
 加星标后，会话自动置顶到**所属项目分组**的顶部；星标会话之间仍按最近更新时间排列，普通会话保持原有顺序。取消星标后恢复原来的时间排序。排序在分页前完成，较旧的星标会话也会出现在第一页，刷新或重启后仍保持置顶。
 
@@ -49,7 +51,7 @@ code --install-extension vscode-extension/pi-session-hub-vscode-0.1.0.vsix --for
 
 星标只保存在 VS Code 扩展的 `globalState` 中，以完整的 `harness:nativeId` 为键；同一扩展存储环境内刷新、重启或切换工作区后仍保留。Remote SSH 使用远程扩展宿主的存储，不承诺跨主机或 VS Code Profile 同步。暂时未扫描到的会话不会自动清除星标。加星标/取消星标不会修改来源记录、Hub 索引或工作区设置；保存失败会提示错误，卡片高亮保持不变。
 
-会话卡片第二行使用与 TUI 一致的 harness 图标（Pi π、Claude ✻、Codex ⬡、OpenCode ⌘、Crush ❯、JCode ◆），由本地 SVG 提供明暗两套颜色，不依赖终端字体。
+标题左侧的 harness 图标由本地 SVG 提供，不依赖终端字体或远程资源。官方资源的来源、版本、适配和使用条款记录在 [media/harness/SOURCES.md](media/harness/SOURCES.md)；它们用于识别会话来源，不表示本项目获得相应品牌的背书。TUI 的字符徽标不受影响。
 
 正文保留 HTTP/mailto 超链接。项目内相对文件链接按**来源会话的 cwd** 解析，点击交给 VS Code 打开对应文件（HTML 默认打开源文件，安装预览扩展后可预览）；Remote SSH 时打开远程文件，不在本机拼路径。不启动网页服务。缺少 cwd、越出项目目录、凭据文件或危险协议的链接不启用；文件消失会明确报错。独立 HTTP 阅读器仍禁用本地文件链接。
 

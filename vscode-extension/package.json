@@ -18,6 +18,18 @@
       "description": "Title color for starred Session Hub sessions.",
       "defaults": { "dark": "#E2B647", "light": "#8A6000", "highContrast": "#FFD700", "highContrastLight": "#805500" }
     }],
+    "configuration": {
+      "title": "Session Hub",
+      "properties": {
+        "sessionHub.sidebar.density": {
+          "type": "string",
+          "enum": ["comfortable", "compact"],
+          "enumDescriptions": ["Two lines per session: title, then time. Easier to read on large screens.", "One line per session, like the Explorer. Shows the most sessions at once."],
+          "default": "comfortable",
+          "description": "Row layout of the Session History sidebar."
+        }
+      }
+    },
     "viewsContainers": { "activitybar": [{ "id": "sessionHub", "title": "Session Hub", "icon": "media/session-hub.svg" }] },
     "views": { "sessionHub": [{ "type": "webview", "id": "sessionHub.sessions", "name": "Session History" }] },
     "commands": [

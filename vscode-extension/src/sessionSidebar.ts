@@ -41,6 +41,10 @@ function parseRequest(value: unknown): SidebarRequest {
   return r as unknown as SidebarRequest;
 }
 
+function sidebarDensity(): "comfortable" | "compact" {
+  return vscode.workspace.getConfiguration("sessionHub.sidebar").get("density") === "compact" ? "compact" : "comfortable";
+}
+
 function escapeAttribute(value: string): string {
   return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 }
@@ -55,10 +59,11 @@ export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Dispos
   private status: string | undefined = "Loading session index…";
   private readonly limits: Record<ProjectScope, number> = { current: PAGE_SIZE, unscoped: PAGE_SIZE, other: PAGE_SIZE };
   private viewDisposables: vscode.Disposable[] = [];
-  private readonly changed: vscode.Disposable;
+  private readonly changed: vscode.Disposable[];
   constructor(private readonly tree: SessionTree, private readonly extensionUri: vscode.Uri,
     private readonly actions: { open: (uid: string) => Promise<void>; resume: (uid: string) => Promise<void>; copyId: (uid: string) => Promise<void> }) {
-    this.changed = tree.onDidChangeTreeData(() => this.publish());
+    this.changed = [tree.onDidChangeTreeData(() => this.publish()),
+      vscode.workspace.onDidChangeConfiguration(event => { if (event.affectsConfiguration("sessionHub.sidebar.density")) this.publish(); })];
   }
 
   set message(value: string | undefined) { this.status = value; this.publish(); }
@@ -122,11 +127,11 @@ export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Dispos
         dark: view.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "harness", "dark", `${row.harness}.svg`)).toString(),
       } })),
     }));
-    void Promise.resolve(view.webview.postMessage({ type: "sessionHub.sidebar.state", groups, search: this.tree.sidebarSearch, searchOpen: this.searchOpen, status: this.status ? redact(this.status) : "" })).catch(() => {});
+    void Promise.resolve(view.webview.postMessage({ type: "sessionHub.sidebar.state", groups, search: this.tree.sidebarSearch, searchOpen: this.searchOpen, density: sidebarDensity(), status: this.status ? redact(this.status) : "" })).catch(() => {});
   }
   private releaseView(): void {
     this.view = undefined; this.ready = false;
     for (const disposable of this.viewDisposables.splice(0)) disposable.dispose();
   }
-  dispose(): void { this.changed.dispose(); this.releaseView(); }
+  dispose(): void { for (const disposable of this.changed) disposable.dispose(); this.releaseView(); }
 }
