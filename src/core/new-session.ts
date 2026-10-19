@@ -67,11 +67,11 @@ export function assertNewSessionLaunchable(target: NewSessionTarget, cwd: string
   if (target.piEnvironment) {
     let ok = false;
     try { ok = fs.statSync(target.piEnvironment.agentDir).isDirectory(); } catch { /* reported below */ }
-    if (!ok) throw new Error("Pi 配置目录不可用，不会切换到默认账号");
+    if (!ok) throw new Error("The Pi configuration directory is unavailable; refusing to fall back to the default account");
   }
   if (cwd) {
     let ok = false;
     try { ok = fs.statSync(cwd).isDirectory(); } catch { /* reported below */ }
-    if (!ok) throw new Error("启动目录不可用");
+    if (!ok) throw new Error("The launch directory is unavailable");
   }
 }

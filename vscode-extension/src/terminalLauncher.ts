@@ -8,20 +8,20 @@ import { assertNewSessionLaunchable, type NewSessionTarget } from "../../src/cor
 
 export class TerminalLauncher implements ResumeLauncher {
   async launch(action: NativeResumeAction): Promise<void> {
-    if (!action.verified) throw new Error("拒绝启动未经验证的命令");
+    if (!action.verified) throw new Error("Refusing to launch an unverified command");
     assertPiEnvironmentAvailable(action);
-    if (action.cwd && !fs.statSync(action.cwd).isDirectory()) throw new Error("源会话的工作目录不可用");
+    if (action.cwd && !fs.statSync(action.cwd).isDirectory()) throw new Error("The source session working directory is unavailable");
     const answer = await vscode.window.showWarningMessage(
       redact([action.description, `${action.command} ${action.args.join(" ")}`,
-        `工作目录：${action.cwd || "来源未记录（使用终端默认目录）"}`,
+        `Working directory: ${action.cwd || "Not recorded by the source (using the terminal default directory)"}`,
         ...(action.piEnvironment?.selected ? [
-          `Pi 环境：${action.piEnvironment.selected.label}`,
+          `Pi environment: ${action.piEnvironment.selected.label}`,
           `PI_CODING_AGENT_DIR=${action.piEnvironment.selected.agentDir}`,
           action.piEnvironment.reason,
         ] : []),
       ].join("\n")),
-      { modal: true }, "在终端中继续");
-    if (answer !== "在终端中继续") return;
+      { modal: true }, "Resume in terminal");
+    if (answer !== "Resume in terminal") return;
     // shellPath + argv, not shell command text: source IDs/paths can't inject
     // shell syntax. The CLI runs its original interactive TUI in a native PTY.
     const terminal = vscode.window.createTerminal({ name: `Session Hub · ${action.piEnvironment?.selected?.label ?? action.command}`,
@@ -33,7 +33,7 @@ export class TerminalLauncher implements ResumeLauncher {
    * so no second confirmation. Same native-PTY, no-shell-text launch as resume. */
   startNew(target: NewSessionTarget, cwd: string | undefined): void {
     assertNewSessionLaunchable(target, cwd);
-    const terminal = vscode.window.createTerminal({ name: `Session Hub · 新会话 · ${target.label}`,
+    const terminal = vscode.window.createTerminal({ name: `Session Hub · New session · ${target.label}`,
       cwd, env: target.env, shellPath: target.executable, shellArgs: [], isTransient: true });
     terminal.show();
   }

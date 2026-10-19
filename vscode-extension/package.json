@@ -15,24 +15,26 @@
   "contributes": {
     "colors": [{
       "id": "sessionHub.starredForeground",
-      "description": "Session Hub 已加星标会话的标题颜色。",
+      "description": "Title color for starred Session Hub sessions.",
       "defaults": { "dark": "#E2B647", "light": "#8A6000", "highContrast": "#FFD700", "highContrastLight": "#805500" }
     }],
     "viewsContainers": { "activitybar": [{ "id": "sessionHub", "title": "Session Hub", "icon": "media/session-hub.svg" }] },
-    "views": { "sessionHub": [{ "type": "webview", "id": "sessionHub.sessions", "name": "会话历史" }] },
+    "views": { "sessionHub": [{ "type": "webview", "id": "sessionHub.sessions", "name": "Session History" }] },
     "commands": [
-      { "command": "sessionHub.refresh", "title": "Session Hub: 刷新索引", "icon": "$(refresh)" },
-      { "command": "sessionHub.newSession", "title": "Session Hub: 新建会话", "icon": "$(add)" },
-      { "command": "sessionHub.open", "title": "Session Hub: 打开会话" },
-      { "command": "sessionHub.resume", "title": "Session Hub: 在终端中继续" },
-      { "command": "sessionHub.copyId", "title": "Session Hub: 复制会话 ID" },
-      { "command": "sessionHub.star", "title": "Session Hub: 加星标", "icon": "$(star-empty)" },
-      { "command": "sessionHub.unstar", "title": "Session Hub: 取消星标", "icon": "$(star-full)" }
+      { "command": "sessionHub.search", "title": "Session Hub: Search Sessions", "icon": "$(search)" },
+      { "command": "sessionHub.refresh", "title": "Session Hub: Refresh Index", "icon": "$(refresh)" },
+      { "command": "sessionHub.newSession", "title": "Session Hub: New Session", "icon": "$(add)" },
+      { "command": "sessionHub.open", "title": "Session Hub: Open Session" },
+      { "command": "sessionHub.resume", "title": "Session Hub: Resume in Terminal" },
+      { "command": "sessionHub.copyId", "title": "Session Hub: Copy Session ID" },
+      { "command": "sessionHub.star", "title": "Session Hub: Star Session", "icon": "$(star-empty)" },
+      { "command": "sessionHub.unstar", "title": "Session Hub: Unstar Session", "icon": "$(star-full)" }
     ],
     "menus": {
       "view/title": [
-        { "command": "sessionHub.newSession", "when": "view == sessionHub.sessions", "group": "navigation@0" },
-        { "command": "sessionHub.refresh", "when": "view == sessionHub.sessions", "group": "navigation@1" }
+        { "command": "sessionHub.search", "when": "view == sessionHub.sessions", "group": "navigation@0" },
+        { "command": "sessionHub.newSession", "when": "view == sessionHub.sessions", "group": "navigation@1" },
+        { "command": "sessionHub.refresh", "when": "view == sessionHub.sessions", "group": "navigation@2" }
       ],
       "webview/context": [
         { "command": "sessionHub.open", "when": "webviewId == sessionHub.sessions && webviewSection == session", "group": "1_open" },

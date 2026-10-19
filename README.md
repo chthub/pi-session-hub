@@ -18,7 +18,7 @@
 - **Continue work that started elsewhere**: press `Enter` and the selected session's conversation is loaded into the current chat as a tiered, budgeted context package, so the next thing you type already has it.
 - **Read without spending tokens**: `v` opens the recovered transcript in a read-only terminal viewer. Browser and VS Code viewers add Markdown and `$...$` / `$$...$$` math rendering, user-message navigation and grouped tool activity.
 - **Reopen the original tool when you want to**: `n` runs the session's own resume command, with the exact command and its verification basis shown before anything is launched.
-- **Stay in VS Code**: use the two-line Session Hub sidebar, open history in editor tabs and choose **▶ 在终端中继续** to resume in an integrated terminal. No HTTP server, browser or port forwarding is needed.
+- **Stay in VS Code**: use the two-line Session Hub sidebar, open history in editor tabs and choose **▶ Resume in terminal** to resume in an integrated terminal. No HTTP server, browser or port forwarding is needed.
 - **Restore the Pi configuration environment**: user-configured profile directories are matched against saved system Context paths; missing or conflicting evidence prompts for a choice instead of silently inheriting another account.
 - **Follow your questions**: the shared reader's user-message outline supports search, click-to-jump, previous/next navigation and scroll tracking.
 - **Inspect agent activity**: consecutive tool calls/results share one compact foldout with tool names, arguments, commands and source call IDs.
@@ -153,9 +153,15 @@ npm run package --prefix vscode-extension
 2. Use **Install from VSIX…** to install `vscode-extension/pi-session-hub-vscode-0.1.0.vsix` on the **remote SSH host**.
 3. Open **Session Hub** in the Activity Bar. The sidebar groups current-project, unscoped and other-project history; multi-root workspaces are supported. Each session uses two rows: title above, harness/recency and an always-visible star button below. Starred cards have a gold title, border and subtle background, and are pinned above ordinary sessions within their project group. Both sections retain newest-first order; unstar restores normal chronological placement. Pinning happens before sidebar pagination.
 4. Click a session to read it in an editor tab: Markdown, local KaTeX, user-message outline, raw/rendered toggle and grouped tool activity use the shared Web Viewer UI.
-5. Choose **在终端中继续** (Resume), confirm, and continue in a native VS Code terminal running the original Pi/Claude/etc TUI. The source-backed cwd takes precedence; no session-store parent or workspace cwd is guessed.
+5. Choose **Resume in terminal**, confirm, and continue in a native VS Code terminal running the original Pi/Claude/etc TUI. The source-backed cwd takes precedence; no session-store parent or workspace cwd is guessed.
    To start a blank conversation instead, click **+** beside the refresh button and pick a harness. Only CLIs found on `PATH` are offered, and Pi appears once per configured Pi environment (`PI_CODING_AGENT_DIR` is set explicitly). The terminal starts in the workspace folder; multi-root workspaces ask which folder.
-6. Refresh the sidebar when source history changes. Each group initially shows 100 sessions; **加载更多** reveals older entries without limiting the index. Context menus offer Open, Resume, Copy Session ID (namespaced UID), and star/unstar for important sessions. Stars persist in VS Code's extension-owned storage, not in the source transcripts or shared session index.
+6. Refresh the sidebar when source history changes. Each group initially shows 100 sessions; **Load more** reveals older entries without limiting the index. Context menus offer Open, Resume, Copy Session ID (namespaced UID), and star/unstar for important sessions. Stars persist in VS Code's extension-owned storage, not in the source transcripts or shared session index.
+
+All extension-generated UI is English, including the reader, navigation, confirmations and tool labels; original titles, transcript content and user-configured profile labels are preserved. The standalone HTTP viewer keeps its Chinese defaults.
+
+Click the **magnifier left of +** to reveal the compact search panel; it starts collapsed. Search defaults to **User prompts**, with **User + assistant** and **All content, including tools** scopes. Clicking the magnifier again or the panel's close button clears the filter and hides the panel. Search uses bounded, role-separated local excerpts, not lossless transcripts; titles and metadata do not count as user prompts. Matching groups expand automatically, with project grouping, star pinning and pagination preserved. While open, the query survives Webview recreation and index refresh. Enter searches immediately; Escape clears the query. Pi and standalone Web search defaults are unchanged.
+
+Click anywhere on a session card, including second-row whitespace, to open it; the star remains an independent action. Relative timestamps stop at **3 days ago**; older records show a local **YYYY-MM-DD** date.
 
 Session tab labels limit the prompt/title to 20 Unicode characters, using `…` for long titles. Sidebar tooltips and the transcript retain the full title, and no editor tab-sizing settings are changed.
 
@@ -195,7 +201,21 @@ not credentials or shell commands. For example:
 - Missing, conflicting, malformed or truncated evidence prompts for a profile. A missing detected directory or invalid configuration is an error, not a silent switch to another account.
 - No private profile names are built into the extension. Without this file, only the standard Pi directory is offered. Changes reload on the next Resume.
 - Hub never reads `auth.json`, copies tokens or rewrites the original transcript. Restoring a directory does not guarantee that its credentials are still valid or its models are available.
-- This config selects launch environments; it does not expand historical scan locations or execute shell aliases. Keep your actual profile list outside the repository.
+- `piEnvironments` selects Pi launch environments; it does not expand Pi historical scan locations or execute shell aliases. Keep your actual profile list outside the repository.
+
+### Codex history directories
+
+The same configuration accepts an optional `codexHomes` list:
+
+```json
+{
+  "codexHomes": ["~/.codex", "~/.codex-work"]
+}
+```
+
+Merge this field with any existing `piEnvironments`; do not replace your Pi settings. Each entry is a Codex **home**, not a `sessions` directory. Hub scans `<home>/sessions` across all entries. Omission defaults to `~/.codex`; an explicit nonempty list replaces the default, so include it if you want both stores. Absolute and `~/` paths are supported; duplicate normalized paths, unknown keys and credential-like paths are rejected. Configuration is reread on refresh and Resume, without recompiling the extension.
+
+Resume uses the indexed source path to select the matching configured home, explicitly sets `CODEX_HOME`, and keeps the source-backed cwd. Missing, unconfigured or symlink-escaped sources cannot choose another account. Hub never reads credentials or changes source files. Copies with the same Codex session ID share one indexed UID, rather than becoming separate accounts/sessions. This option does not add profile choices to the blank-new-session picker.
 
 ## Standalone Web Viewer
 
@@ -368,7 +388,7 @@ Context loading is generated locally and deterministically. No LLM, no network, 
 |---|---|---|---|
 | Pi | `~/.pi/agent/sessions/--<cwd>--/*.jsonl` | JSONL tree v3 | `pi --session <path>` |
 | Claude Code | `~/.claude/projects/<slug>/*.jsonl` | JSONL (undocumented) | `claude --resume <uuid>` |
-| Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | JSONL (undocumented) | `codex resume <id>` |
+| Codex | Configured `codexHomes` + `/sessions/YYYY/MM/DD/rollout-*.jsonl` (default `~/.codex`) | JSONL (undocumented) | `CODEX_HOME=<source home> codex resume <id>` |
 | OpenCode | `~/.local/share/opencode/opencode.db` | SQLite | `opencode --session <id>` |
 | Crush | `~/.crush/crush.db` | SQLite | `crush --session <id>` |
 | JCode | `~/.jcode/sessions/*.json` | JSON | `jcode --resume <id>` |

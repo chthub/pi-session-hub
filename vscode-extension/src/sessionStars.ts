@@ -19,7 +19,7 @@ export class SessionStars {
     const value = this.state.get<unknown>(SESSION_STARS_KEY);
     if (value === undefined) return new Set();
     // Fail closed rather than silently replacing corrupt/unrecognized state.
-    if (!Array.isArray(value) || !value.every(isUid)) throw new Error("会话星标存储格式无效；未覆盖已有数据");
+    if (!Array.isArray(value) || !value.every(isUid)) throw new Error("Invalid session star storage format; existing data has not been overwritten");
     return new Set(value);
   }
 
@@ -27,7 +27,7 @@ export class SessionStars {
   has(uid: string): boolean { return this.starred.has(uid); }
 
   set(uid: string, starred: boolean): Promise<void> {
-    if (!isUid(uid)) return Promise.reject(new Error("无效的会话 ID"));
+    if (!isUid(uid)) return Promise.reject(new Error("Invalid session ID"));
     // Serialize read/modify/write so rapid clicks cannot lose another star.
     // Reread preferences unless a rejected update may have polluted Memento's
     // in-memory cache. Recover from our last acknowledged snapshot in that case.
@@ -39,7 +39,7 @@ export class SessionStars {
         try { await this.state.update(SESSION_STARS_KEY, [...next].sort()); }
         catch {
           this.needsRecovery = true;
-          throw new Error("无法保存会话星标；请重试（显示状态未改变）");
+          throw new Error("Could not save session stars. Try again (displayed state is unchanged).");
         }
         this.needsRecovery = false;
       }

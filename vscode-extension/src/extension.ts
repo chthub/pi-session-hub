@@ -18,24 +18,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const stars = new SessionStars(context.globalState);
   try { stars.load(); }
   catch (error) {
-    await vscode.window.showErrorMessage(redact(`Session Hub: 无法读取会话星标：${error instanceof Error ? error.message : String(error)}`));
+    await vscode.window.showErrorMessage(redact(`Session Hub: Could not load starred sessions: ${error instanceof Error ? error.message : String(error)}`));
   }
   const tree = new SessionTree(hub, () => workspaceDirs(), context.extensionUri, stars);
   const launcher = new TerminalLauncher();
   const uidFrom = (value: unknown): string => {
     const uid = value instanceof SessionTreeItem ? value.session.uid
       : value && typeof value === "object" ? (value as { sessionUid?: unknown }).sessionUid : value;
-    if (typeof uid !== "string" || !uid || uid.length > 2000) throw new Error("请选择一条会话");
+    if (typeof uid !== "string" || !uid || uid.length > 2000) throw new Error("Select a session first.");
     return uid;
   };
   const resume = async (uid: string): Promise<void> => {
     const resolved = await hub.resolveResume(uid);
-    if (!resolved) throw new Error("此会话没有经过验证的继续命令（子 agent 记录不可直接继续）");
+    if (!resolved) throw new Error("No verified resume command is available for this session (subagent records cannot be resumed directly).");
     let action = resolved.action;
     if (action.piEnvironment && !action.piEnvironment.selected) {
       const selection = await vscode.window.showQuickPick<vscode.QuickPickItem & { profile: PiEnvironment }>(
         action.piEnvironment.choices.map(profile => ({ label: profile.label, description: profile.agentDir, profile })),
-        { title: "选择本次继续使用的 Pi 环境", placeHolder: action.piEnvironment.reason, ignoreFocusOut: true });
+        { title: "Select a Pi environment to resume", placeHolder: action.piEnvironment.reason, ignoreFocusOut: true });
       if (!selection) return;
       action = selectPiEnvironment(action, selection.profile.id);
     }
@@ -45,18 +45,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     .filter(folder => folder.uri.scheme === "file" || folder.uri.scheme === "vscode-remote").map(folder => folder.uri.fsPath);
   const newSession = async (): Promise<void> => {
     const targets = newSessionTargets(os.homedir());
-    if (!targets.length) throw new Error("PATH 中没有找到可启动的 harness（pi、claude、codex、opencode、crush、jcode）");
+    if (!targets.length) throw new Error("No supported agent CLI found on PATH (pi, claude, codex, opencode, crush, jcode).");
     const target = await vscode.window.showQuickPick<vscode.QuickPickItem & { target: NewSessionTarget }>(
       targets.map(target => ({ label: target.label, description: target.executable,
         detail: target.piEnvironment ? `PI_CODING_AGENT_DIR=${target.piEnvironment.agentDir}` : undefined, target })),
-      { title: "新建会话：选择 harness", placeHolder: "在新终端中启动一个空白对话", ignoreFocusOut: true });
+      { title: "New Session: Select an Agent", placeHolder: "Start a blank session in a new terminal", ignoreFocusOut: true });
     if (!target) return;
     const dirs = workspaceDirs();
     let cwd: string | undefined = dirs[0];
     if (dirs.length > 1) {
       const folder = await vscode.window.showQuickPick<vscode.QuickPickItem & { cwd: string }>(
         dirs.map(dir => ({ label: path.basename(dir) || dir, description: dir, cwd: dir })),
-        { title: `新建 ${target.label} 会话：选择工作目录`, ignoreFocusOut: true });
+        { title: `New ${target.label} Session: Select a Working Directory`, ignoreFocusOut: true });
       if (!folder) return;
       cwd = folder.cwd;
     }
@@ -64,17 +64,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   let refreshing: Promise<unknown> | undefined;
   const refresh = (): Promise<unknown> => {
-    if (!refreshing) refreshing = Promise.resolve(vscode.window.withProgress({ location: { viewId: "sessionHub.sessions" }, title: "刷新会话索引" }, async () => {
+    if (!refreshing) refreshing = Promise.resolve(vscode.window.withProgress({ location: { viewId: "sessionHub.sessions" }, title: "Refresh Session Index" }, async () => {
       const result = await hub.refresh();
       await tree.reload();
-      view.message = result.errors.length ? redact(`部分来源读取失败：${result.errors.map(e => `${e.harness}: ${e.message}`).join("；")}`) : undefined;
+      view.message = result.errors.length ? redact(`Some sources could not be read: ${result.errors.map(e => `${e.harness}: ${e.message}`).join("; ")}`) : undefined;
       return result;
     })).finally(() => { refreshing = undefined; });
     return refreshing;
   };
   const viewer = new SessionViewer(hub, context.extensionUri, resume, refresh);
   const copyId = async (uid: string): Promise<void> => {
-    if (!(await hub.getSessionMetadata(uid))) throw new Error("会话不存在");
+    if (!(await hub.getSessionMetadata(uid))) throw new Error("Session not found.");
     await vscode.env.clipboard.writeText(uid);
   };
   const view = new SessionSidebar(tree, context.extensionUri, { open: uid => viewer.open(uid), resume, copyId });
@@ -86,6 +86,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push({ dispose: () => hub.close() }, tree, view, viewer,
     vscode.window.registerFileDecorationProvider(tree),
     vscode.window.registerWebviewViewProvider("sessionHub.sessions", view),
+    command("sessionHub.search", () => view.toggleSearch()),
     command("sessionHub.refresh", () => refresh()),
     command("sessionHub.newSession", () => newSession()),
     command("sessionHub.open", value => viewer.open(uidFrom(value))),
@@ -96,7 +97,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.onDidChangeWorkspaceFolders(() => tree.rescope()));
   try { await hub.init(); await refresh(); }
   catch (error) {
-    view.message = redact(`索引读取失败：${error instanceof Error ? error.message : String(error)}`);
+    view.message = redact(`Could not read the session index: ${error instanceof Error ? error.message : String(error)}`);
     await vscode.window.showErrorMessage(view.message);
   }
 }

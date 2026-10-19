@@ -1,6 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const transport = window.sessionHubTransport;
+const { t, locale } = window.sessionHubLocale;
 const harnessLabels = { pi: "Pi", "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", crush: "Crush", jcode: "JCode" };
 let sessions = [];
 let selected = null;
@@ -36,11 +37,11 @@ function preview(text, length = 150) {
   const flat = text.replace(/<[^>]*>/g, " ").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/^[#>\s]+/, "").replace(/[*`]/g, "").replace(/\s+/g, " ").trim();
   return flat.length > length ? flat.slice(0, length) + "…" : flat;
 }
-function projectName(value) { return value?.split(/[\\/]/).filter(Boolean).pop() || "未记录项目"; }
+function projectName(value) { return value?.split(/[\\/]/).filter(Boolean).pop() || t("未记录项目", "Project not recorded"); }
 function dateLabel(value) {
   const date = new Date(value);
-  if (!value || Number.isNaN(date.getTime())) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(date);
+  if (!value || Number.isNaN(date.getTime())) return t("时间未知", "Unknown time");
+  return new Intl.DateTimeFormat(locale, { month: "2-digit", day: "2-digit" }).format(date);
 }
 function notice(text, error = false) {
   $("notice").textContent = text;
@@ -49,8 +50,8 @@ function notice(text, error = false) {
 }
 async function loadStatus() {
   const data = await transport.status();
-  const warnings = data.scan.errors.map(item => `${item.harness}: ${item.message}`).join("；");
-  notice(`已连接 · ${data.scan.total} 条本机会话 · 正文不会上传${warnings ? " · 部分来源读取失败：" + warnings : ""}`, Boolean(warnings));
+  const warnings = data.scan.errors.map(item => `${item.harness}: ${item.message}`).join(t("；", "; "));
+  notice(t(`已连接 · ${data.scan.total} 条本机会话 · 正文不会上传${warnings ? " · 部分来源读取失败：" + warnings : ""}`, `Connected · ${data.scan.total} local sessions · Transcript stays local${warnings ? " · Some sources could not be read: " + warnings : ""}`), Boolean(warnings));
 }
 function setSidebar(open) {
   document.body.dataset.sidebar = open ? "open" : "closed";
@@ -68,8 +69,8 @@ function renderList(revealSelection = false) {
     topline.append(element("span", harnessLabels[session.harness] || session.harness, "harness-badge"), element("span", dateLabel(session.updatedAt)));
     row.append(topline, element("strong", preview(session.title || session.preview || session.uid, 220), "session-title"));
     const project = element("span", projectName(session.repo), "session-project");
-    project.title = session.repo || "未记录项目";
-    row.append(project, element("span", `${session.messageCount} 条消息${session.model ? " · " + session.model : ""}`, "session-meta"));
+    project.title = session.repo || t("未记录项目", "Project not recorded");
+    row.append(project, element("span", `${t(`${session.messageCount} 条消息`, `${session.messageCount} messages`)}${session.model ? " · " + session.model : ""}`, "session-meta"));
     fragment.append(row);
   }
   $("sessions").replaceChildren(fragment);
@@ -78,25 +79,25 @@ function renderList(revealSelection = false) {
 async function loadList(append = false) {
   const version = ++listVersion;
   $("more").disabled = true;
-  $("list-status").textContent = "正在搜索…";
+  $("list-status").textContent = t("正在搜索…", "Searching…");
   const query = { q: $("search").value, harness: $("harness").value, limit: "50", offset: String(append ? sessions.length : 0) };
   try {
     const result = await transport.listSessions(query);
     if (version !== listVersion) return;
     sessions = append ? sessions.concat(result.sessions) : result.sessions;
     renderList();
-    $("list-status").textContent = sessions.length ? `已显示 ${sessions.length} 条${result.hasMore ? " · 还有更多" : ""}` : "没有匹配的会话，试试其他关键词";
+    $("list-status").textContent = sessions.length ? t(`已显示 ${sessions.length} 条${result.hasMore ? " · 还有更多" : ""}`, `${sessions.length} shown${result.hasMore ? " · More available" : ""}`) : t("没有匹配的会话，试试其他关键词", "No matching sessions. Try different keywords.");
     $("more").hidden = !result.hasMore;
   } catch (error) {
     if (version !== listVersion) return;
-    $("list-status").textContent = `搜索失败：${error.message}`;
+    $("list-status").textContent = t(`搜索失败：${error.message}`, `Search failed: ${error.message}`);
     $("more").hidden = true;
   } finally {
     if (version === listVersion) $("more").disabled = false;
   }
 }
 
-function clearOutline(message = "选择会话后显示目录") {
+function clearOutline(message = t("选择会话后显示目录", "Select a session to show its outline")) {
   resizeObserver?.disconnect();
   cancelAnimationFrame(measureFrame);
   cancelAnimationFrame(scrollFrame);
@@ -107,7 +108,7 @@ function clearOutline(message = "选择会话后显示目录") {
   $("outline-items").replaceChildren();
   $("outline-count").textContent = "0";
   $("outline-status").textContent = message;
-  $("outline-position").textContent = "尚未定位";
+  $("outline-position").textContent = t("尚未定位", "No position selected");
   $("outline-filter").disabled = true;
   $("previous-user").disabled = true;
   $("next-user").disabled = true;
@@ -120,16 +121,16 @@ function renderOutline() {
   for (const user of filtered) {
     const row = button(undefined, () => jumpToUser(user.id), "outline-item");
     row.dataset.target = user.id;
-    row.title = `第 ${user.ordinal} 条用户消息 · 对话消息 #${user.index + 1}\n${preview(user.text, 600)}`;
-    row.setAttribute("aria-label", `第 ${user.ordinal} 条用户消息：${preview(user.text)}`);
-    row.append(element("span", String(user.ordinal).padStart(2, "0"), "outline-number"), element("span", preview(user.text) || "空白用户消息", "outline-text"));
+    row.title = t(`第 ${user.ordinal} 条用户消息 · 对话消息 #${user.index + 1}\n${preview(user.text, 600)}`, `User message ${user.ordinal} · Transcript message #${user.index + 1}\n${preview(user.text, 600)}`);
+    row.setAttribute("aria-label", t(`第 ${user.ordinal} 条用户消息：${preview(user.text)}`, `User message ${user.ordinal}: ${preview(user.text)}`));
+    row.append(element("span", String(user.ordinal).padStart(2, "0"), "outline-number"), element("span", preview(user.text) || t("空白用户消息", "Empty user message"), "outline-text"));
     if (user.id === activeUser) row.setAttribute("aria-current", "location");
     outlineButtons.set(user.id, row);
     fragment.append(row);
   }
-  if (!filtered.length) fragment.append(element("p", users.length ? "没有匹配的提问，试试其他关键词。" : "这个会话没有可恢复的用户消息。", "outline-empty"));
+  if (!filtered.length) fragment.append(element("p", users.length ? t("没有匹配的提问，试试其他关键词。", "No matching questions. Try different keywords.") : t("这个会话没有可恢复的用户消息。", "No recoverable user messages in this session."), "outline-empty"));
   $("outline-items").replaceChildren(fragment);
-  $("outline-status").textContent = users.length ? (query ? `找到 ${filtered.length} / ${users.length} 条用户消息` : `${users.length} 次提问 · 点击即可跳转`) : "仅列出来源中可恢复的用户消息";
+  $("outline-status").textContent = users.length ? (query ? t(`找到 ${filtered.length} / ${users.length} 条用户消息`, `${filtered.length} / ${users.length} user messages found`) : t(`${users.length} 次提问 · 点击即可跳转`, `${users.length} questions · Click to jump`)) : t("仅列出来源中可恢复的用户消息", "Only recoverable user messages are listed");
 }
 function revealInPanel(row, panel) {
   if (!row || !panel.clientHeight) return;
@@ -149,7 +150,7 @@ function setActiveUser(id, reveal = true) {
   row?.setAttribute("aria-current", "location");
   if (id) $(id)?.setAttribute("data-current", "true");
   const index = users.findIndex(user => user.id === id);
-  $("outline-position").textContent = index >= 0 ? `第 ${index + 1} / ${users.length} 条用户消息` : "没有用户消息";
+  $("outline-position").textContent = index >= 0 ? t(`第 ${index + 1} / ${users.length} 条用户消息`, `User message ${index + 1} / ${users.length}`) : t("没有用户消息", "No user messages");
   $("previous-user").disabled = index <= 0;
   $("next-user").disabled = index < 0 || index >= users.length - 1;
   if (changed && reveal) revealInPanel(row, $("outline-items"));
@@ -237,7 +238,7 @@ function renderMessageBody(message) {
       link.addEventListener("click", async event => {
         event.preventDefault();
         try { await transport.openLink(selected, link.dataset.sessionLink); }
-        catch (error) { notice(`打开链接失败：${error.message}`, true); }
+        catch (error) { notice(t(`打开链接失败：${error.message}`, `Unable to open link: ${error.message}`), true); }
       });
     }
     for (const table of body.querySelectorAll("table")) {
@@ -257,8 +258,8 @@ function renderToolGroup(start, end, openGroups) {
   const range = end - start === 1 ? `#${start + 1}` : `#${start + 1}–#${end}`;
   const calls = detail.messages.slice(start, end).filter(isToolCall).length;
   const outputs = end - start - calls;
-  const count = calls ? `${calls} 次调用${outputs ? ` · ${outputs} 条输出` : ""}` : `${outputs} 条`;
-  heading.append(element("span", calls ? "工具活动" : "工具输出", "role-label"), element("span", count, "tool-group-count"), element("span", range, "message-index"));
+  const count = calls ? t(`${calls} 次调用${outputs ? ` · ${outputs} 条输出` : ""}`, `${calls} calls${outputs ? ` · ${outputs} outputs` : ""}`) : t(`${outputs} 条`, `${outputs} outputs`);
+  heading.append(element("span", calls ? t("工具活动", "Tool activity") : t("工具输出", "Tool output"), "role-label"), element("span", count, "tool-group-count"), element("span", range, "message-index"));
   group.append(heading);
   for (let index = start; index < end; index++) {
     const message = detail.messages[index];
@@ -268,9 +269,9 @@ function renderToolGroup(start, end, openGroups) {
     output.tabIndex = -1;
     const label = element("h4", undefined, "tool-entry-heading");
     label.title = message.role;
-    label.append(element("span", `${call ? "调用" : "输出"}${message.toolName ? " · " + message.toolName : ""}`), element("span", `#${index + 1}`, "message-index"));
+    label.append(element("span", `${call ? t("调用", "Call") : t("输出", "Output")}${message.toolName ? " · " + message.toolName : ""}`), element("span", `#${index + 1}`, "message-index"));
     output.append(label);
-    if (!call && message.toolCallId) output.append(element("p", `调用 ID：${message.toolCallId}`, "tool-call-id"));
+    if (!call && message.toolCallId) output.append(element("p", t(`调用 ID：${message.toolCallId}`, `Call ID: ${message.toolCallId}`), "tool-call-id"));
     output.append(renderMessageBody(message));
     group.append(output);
   }
@@ -285,39 +286,39 @@ function renderDetail(restore = null) {
   viewer.replaceChildren();
   const content = element("div", undefined, "transcript-content");
   content.append(element("span", harnessLabels[detail.harness] || detail.harness, "harness-badge"), element("h2", preview(detail.title || detail.uid, 200), "session-heading"));
-  content.append(element("p", [projectName(detail.repo || detail.cwd), detail.model, `${detail.messages.length} 条已恢复记录`].filter(Boolean).join(" · "), "session-subtitle"));
+  content.append(element("p", [projectName(detail.repo || detail.cwd), detail.model, t(`${detail.messages.length} 条已恢复记录`, `${detail.messages.length} recovered records`)].filter(Boolean).join(" · "), "session-subtitle"));
   const info = element("details", undefined, "session-info");
-  info.append(element("summary", "会话信息与读取说明"));
-  info.append(element("p", [detail.uid, detail.repo || detail.cwd, `来源：${detail.path}`].filter(Boolean).join("\n"), "metadata"));
-  info.append(element("p", `恢复 ${detail.messages.length} 条阅读记录（含工具调用与输出）；来源计数 ${detail.messageCount} 条消息。沿用 adapter 的读取上限，不保证恢复全部历史。目录仅包含已恢复的用户消息。`, "metadata"));
+  info.append(element("summary", t("会话信息与读取说明", "Session information and reading notes")));
+  info.append(element("p", [detail.uid, detail.repo || detail.cwd, t(`来源：${detail.path}`, `Source: ${detail.path}`)].filter(Boolean).join("\n"), "metadata"));
+  info.append(element("p", t(`恢复 ${detail.messages.length} 条阅读记录（含工具调用与输出）；来源计数 ${detail.messageCount} 条消息。沿用 adapter 的读取上限，不保证恢复全部历史。目录仅包含已恢复的用户消息。`, `${detail.messages.length} reading records recovered (including tool calls and outputs); source count: ${detail.messageCount} messages. Adapter read limits apply; full history recovery is not guaranteed. The outline includes only recovered user messages.`), "metadata"));
   const missing = [];
-  if (!detail.fidelity.hasToolCalls) missing.push("工具调用");
-  if (!detail.fidelity.hasToolResults) missing.push("工具结果");
-  if (!detail.fidelity.hasReasoning) missing.push("推理记录");
-  if (missing.length) info.append(element("p", `来源未提供：${missing.join("、")}。`, "metadata"));
+  if (!detail.fidelity.hasToolCalls) missing.push(t("工具调用", "tool calls"));
+  if (!detail.fidelity.hasToolResults) missing.push(t("工具结果", "tool results"));
+  if (!detail.fidelity.hasReasoning) missing.push(t("推理记录", "reasoning"));
+  if (missing.length) info.append(element("p", t(`来源未提供：${missing.join("、")}。`, `Not provided by the source: ${missing.join(", ")}.`), "metadata"));
   for (const note of detail.fidelity.notes) info.append(element("p", note, "metadata"));
   content.append(info);
   const toolbar = element("div", undefined, "transcript-toolbar");
   const actions = element("div", undefined, "toolbar-actions");
-  const toggle = button(raw ? "查看渲染正文" : "查看原文", () => {
+  const toggle = button(raw ? t("查看渲染正文", "View rendered text") : t("查看原文", "View raw text"), () => {
     const reading = captureReadingPosition();
     raw = !raw;
     renderDetail(reading);
   });
   toggle.setAttribute("aria-pressed", String(raw));
-  actions.append(toggle, button("回到开头", () => viewer.scrollTo({ top: 0 })), button("跳到末尾", () => viewer.scrollTo({ top: viewer.scrollHeight })));
+  actions.append(toggle, button(t("回到开头", "Back to top"), () => viewer.scrollTo({ top: 0 })), button(t("跳到末尾", "Jump to bottom"), () => viewer.scrollTo({ top: viewer.scrollHeight })));
   const zoomGroup = element("div", undefined, "zoom-controls");
   zoomGroup.setAttribute("role", "group");
-  zoomGroup.setAttribute("aria-label", "正文缩放");
+  zoomGroup.setAttribute("aria-label", t("正文缩放", "Transcript zoom"));
   const zoomOut = button("−", () => stepZoom(-1));
   const zoomLevel = button("100%", () => setZoom(100), "zoom-level");
   const zoomIn = button("+", () => stepZoom(1));
   zoomOut.id = "zoom-out";
   zoomLevel.id = "zoom-level";
   zoomIn.id = "zoom-in";
-  zoomOut.title = "缩小正文";
-  zoomLevel.title = "恢复 100%";
-  zoomIn.title = "放大正文";
+  zoomOut.title = t("缩小正文", "Zoom out");
+  zoomLevel.title = t("恢复 100%", "Reset to 100%");
+  zoomIn.title = t("放大正文", "Zoom in");
   for (const control of [zoomOut, zoomLevel, zoomIn]) control.setAttribute("aria-label", control.title);
   zoomGroup.append(zoomOut, zoomLevel, zoomIn);
   actions.append(zoomGroup);
@@ -333,7 +334,7 @@ function renderDetail(restore = null) {
     }
     actions.append(control);
   }
-  toolbar.append(element("span", "对话正文", "transcript-count"), actions);
+  toolbar.append(element("span", t("对话正文", "Transcript"), "transcript-count"), actions);
   content.append(toolbar);
   // CSS zoom scales the messages like browser zoom while the toolbar keeps
   // its size, so the zoom buttons stay under the pointer.
@@ -356,14 +357,14 @@ function renderDetail(restore = null) {
     article.tabIndex = -1;
     if (isUser) users.push({ id: article.id, ordinal: users.length + 1, index, text: message.text });
     const heading = element("h3", undefined, "role");
-    const label = isUser ? "你" : message.role === "assistant" ? "助手" : message.role;
+    const label = isUser ? t("你", "You") : message.role === "assistant" ? t("助手", "Assistant") : message.role;
     heading.append(element("span", label, "role-label"));
-    if (isUser) heading.append(element("span", `第 ${users.length} 次提问`));
+    if (isUser) heading.append(element("span", t(`第 ${users.length} 次提问`, `Question ${users.length}`)));
     heading.append(element("span", `#${index + 1}`, "message-index"));
     article.append(heading, renderMessageBody(message));
     messages.append(article);
   }
-  if (!detail.messages.length) messages.append(element("p", "来源没有可恢复的文本消息。", "muted"));
+  if (!detail.messages.length) messages.append(element("p", t("来源没有可恢复的文本消息。", "No recoverable text messages in the source."), "muted"));
   viewer.append(content);
   updateZoomControls();
   $("outline-count").textContent = String(users.length);
@@ -383,9 +384,9 @@ async function openSession(uid) {
   detail = null;
   setSidebar(false);
   $("outline-filter").value = "";
-  clearOutline("正在读取用户消息…");
+  clearOutline(t("正在读取用户消息…", "Loading user messages…"));
   renderList(true);
-  $("viewer").replaceChildren(element("p", "正在读取对话…", "muted"));
+  $("viewer").replaceChildren(element("p", t("正在读取对话…", "Loading conversation…"), "muted"));
   try {
     const result = await transport.getSession(uid);
     if (version !== detailVersion) return;
@@ -395,8 +396,8 @@ async function openSession(uid) {
     scheduleMeasure();
   } catch (error) {
     if (version === detailVersion) {
-      $("viewer").replaceChildren(element("p", `读取失败：${error.message}`, "error"));
-      clearOutline("读取失败，暂无目录");
+      $("viewer").replaceChildren(element("p", t(`读取失败：${error.message}`, `Read failed: ${error.message}`), "error"));
+      clearOutline(t("读取失败，暂无目录", "Read failed; outline unavailable"));
     }
   }
 }
@@ -416,7 +417,7 @@ document.addEventListener("keydown", event => {
 function updateThemeButton() {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   $("theme-toggle").textContent = "◐";
-  $("theme-toggle").title = dark ? "切换浅色模式" : "切换深色模式";
+  $("theme-toggle").title = dark ? t("切换浅色模式", "Switch to light mode") : t("切换深色模式", "Switch to dark mode");
   $("theme-toggle").setAttribute("aria-label", $("theme-toggle").title);
 }
 $("theme-toggle").addEventListener("click", () => {
@@ -436,13 +437,13 @@ $("harness").addEventListener("change", () => { clearTimeout(timer); loadList();
 $("more").addEventListener("click", () => loadList(true));
 $("refresh").addEventListener("click", async () => {
   $("refresh").disabled = true;
-  notice("正在扫描本机会话…");
+  notice(t("正在扫描本机会话…", "Scanning local sessions…"));
   try {
     await transport.refresh();
     await loadStatus();
     if (transport.hasSessionList) await loadList();
     if (selected) await openSession(selected);
-  } catch (error) { notice(`刷新失败：${error.message}`, true); }
+  } catch (error) { notice(t(`刷新失败：${error.message}`, `Refresh failed: ${error.message}`), true); }
   finally { $("refresh").disabled = false; }
 });
 loadStatus().then(() => transport.initialUid ? openSession(transport.initialUid) : loadList()).catch(error => notice(error.message, true));

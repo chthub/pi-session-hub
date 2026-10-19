@@ -6,6 +6,7 @@
  */
 
 import path from "node:path";
+import { ScopedSearchText } from "./search-content.ts";
 import { readSessionJsonl, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import { PiEnvironmentDetector, defaultPiEnvironments, type PiEnvironment, type PiEnvironmentResolution } from "../core/pi-environment.ts";
 import { loadPiEnvironments } from "../core/config.ts";
@@ -103,7 +104,7 @@ export class PiAdapter implements SessionAdapter {
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
-      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
+      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity, opts.locale);
       if (!parsed || parsed.session.nativeId !== nativeId) continue;
       return {
         ...parsed.session,
@@ -117,7 +118,7 @@ export class PiAdapter implements SessionAdapter {
 
   async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     if (ref.harness !== this.id) return null;
-    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity);
+    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity, opts.locale);
     if (!parsed || parsed.session.uid !== ref.uid) return null;
     return { ...parsed.session, messages: parsed.messages, tools: toToolSummaries(parsed.tools), commands: parsed.commands };
   }
@@ -149,7 +150,7 @@ export class PiAdapter implements SessionAdapter {
       requiresConfirmation: true, description: `Open this Pi session in a new pi process (${path.basename(file)})` };
   }
 
-  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
+  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false, locale: NonNullable<SessionReadOptions["locale"]> = "zh-CN"): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
     if (!stat.size) return null;
@@ -166,6 +167,7 @@ export class PiAdapter implements SessionAdapter {
 
     const messages = transcriptMessages(read.notes);
     const searchAcc: string[] = [];
+    const scopedSearch = new ScopedSearchText();
     const toolNames = toolCounter(read.notes);
     const commands: string[] = [];
     const filesChanged = new Set<string>();
@@ -199,6 +201,15 @@ export class PiAdapter implements SessionAdapter {
         }
         continue;
       }
+      if (type === "compaction" || type === "branch_summary") scopedSearch.add("system", entry.summary);
+      if (type === "compaction") {
+        const checkpoint = entry.systemMessage as Record<string, unknown> | undefined;
+        if (checkpoint?.role === "system") {
+          scopedSearch.add("system", checkpoint.content);
+          scopedSearch.system(checkpoint.sections);
+        }
+      }
+      if (type === "custom_message") scopedSearch.add("system", entry.content);
       if (type !== "message") continue;
 
       const msg = entry.message as Record<string, unknown> | undefined;
@@ -229,11 +240,22 @@ export class PiAdapter implements SessionAdapter {
         if (toolName) collectPaths(msg.details, toolName, filesChanged, filesRead);
       }
 
+      scopedSearch.add(role, msg.content);
+      if (role === "system") scopedSearch.system(msg.sections);
+      if (Array.isArray(msg.tool_calls)) {
+        for (const call of msg.tool_calls) {
+          if (call && typeof call === "object") {
+            // Legacy Pi call envelopes omit type; OpenAI function objects
+            // carry it. The source tool_calls field, not prose, supplies role.
+            scopedSearch.add("assistant", [{ type: "tool_call", ...call }]);
+          }
+        }
+      }
       const textPart = contentToText(msg.content);
       if (textPart) addSearchText(searchAcc, role, textPart);
       if (withMessages && includeToolActivity) {
-        if (/tool|function/i.test(role)) pushToolResult(messages, msg.content, msg.toolName, msg.toolCallId ?? msg.tool_call_id, Infinity);
-        else pushTranscriptBlocks(messages, role, msg.content, { preserveFormatting, textLimit: 8000, max: Infinity });
+        if (/tool|function/i.test(role)) pushToolResult(messages, msg.content, msg.toolName, msg.toolCallId ?? msg.tool_call_id, Infinity, locale);
+        else pushTranscriptBlocks(messages, role, msg.content, { preserveFormatting, textLimit: 8000, max: Infinity }, locale);
       } else if (withMessages) {
         if (textPart) pushMessage(messages, role, textPart, Infinity, preserveFormatting);
       } else if (role === "user" && messages.length < 3) {
@@ -268,6 +290,7 @@ export class PiAdapter implements SessionAdapter {
       toolCount: toolNames.length,
       preview,
       searchText: searchTextFrom(searchAcc),
+      searchScopes: scopedSearch.finish(),
       fidelity: {
         ...emptyFidelity(read.notes),
         hasToolCalls: toolNames.length > 0,

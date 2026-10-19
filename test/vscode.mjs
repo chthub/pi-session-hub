@@ -25,7 +25,7 @@ let checks = 0;
 function check(name, value) { assert.ok(value, name); console.log(`PASS ${name}`); checks++; }
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 check("manifest prefers the remote workspace host", manifest.extensionKind.join() === "workspace");
-check("manifest contributes Activity Bar, two-line webview sidebar and commands", manifest.contributes.viewsContainers.activitybar[0].id === "sessionHub" && manifest.contributes.views.sessionHub[0].id === "sessionHub.sessions" && manifest.contributes.views.sessionHub[0].type === "webview" && manifest.contributes.commands.length === 7);
+check("manifest contributes Activity Bar, two-line webview sidebar and commands", manifest.contributes.viewsContainers.activitybar[0].id === "sessionHub" && manifest.contributes.views.sessionHub[0].id === "sessionHub.sessions" && manifest.contributes.views.sessionHub[0].type === "webview" && manifest.contributes.commands.length === 8);
 const starColor = manifest.contributes.colors.find(color => color.id === "sessionHub.starredForeground");
 check("star color supplies dark/light/high-contrast defaults without changing user settings",
   ["dark", "light", "highContrast", "highContrastLight"].every(theme => /^#[a-f0-9]{6}$/i.test(starColor.defaults[theme])));
@@ -63,7 +63,15 @@ const readingFile = path.join(project, readingHref);
 fs.mkdirSync(path.dirname(readingFile), { recursive: true });
 fs.writeFileSync(readingFile, "<html><body>阅读页</body></html>");
 const linkedText = "以下为虚构的诊断示例。\n\n[阅读页：诊断结果与解释说明](" + readingHref + ")\n\n[网站](https://example.com/report)";
-fs.appendFileSync(piSource, JSON.stringify({ type: "message", message: { role: "assistant", content: linkedText } }) + "\n");
+fs.appendFileSync(piSource, [
+  { type: "message", message: { role: "assistant", content: linkedText } },
+  { type: "message", message: { role: "user", content: "scopeuserneedle 检索用户提问" } },
+  { type: "message", message: { role: "assistant", content: [
+    { type: "text", text: "scopeassistantneedle 检索助手回复" },
+    { type: "toolCall", id: "scope-call", name: "bash", arguments: { command: "echo scopetoolneedle" } },
+  ] } },
+  { type: "message", message: { role: "toolResult", toolCallId: "scope-call", toolName: "bash", content: [{ type: "text", text: "scopeoutputneedle" }] } },
+].map(row => JSON.stringify(row)).join("\n") + "\n");
 const localLinks = new SessionLinks(project);
 check("session-relative links and fragments resolve from source cwd, including spaces",
   localLinks.resolve(localLinks.register(readingHref + "#结果")).path === fs.realpathSync(readingFile) &&
@@ -82,13 +90,13 @@ fs.symlinkSync(readingFile, symlink);
 const symlinkId = localLinks.register("linked.html");
 assert.equal(localLinks.resolve(symlinkId).path, fs.realpathSync(readingFile));
 fs.unlinkSync(symlink); fs.symlinkSync(outsideFile, symlink);
-assert.throws(() => localLinks.resolve(symlinkId), /项目内/);
+assert.throws(() => localLinks.resolve(symlinkId), /outside the session project/);
 const credential = path.join(project, "auth.json");
 fs.writeFileSync(credential, "{}");
 fs.unlinkSync(symlink); fs.symlinkSync(credential, symlink);
-assert.throws(() => localLinks.resolve(symlinkId), /受保护/);
-assert.throws(() => localLinks.resolve("a".repeat(32)), /不属于/);
-assert.throws(() => localLinks.resolve(localLinks.register("missing.html")), /不存在/);
+assert.throws(() => localLinks.resolve(symlinkId), /protected file/);
+assert.throws(() => localLinks.resolve("a".repeat(32)), /does not belong/);
+assert.throws(() => localLinks.resolve(localLinks.register("missing.html")), /no longer exists/);
 check("click revalidates missing files, forged IDs and changed/credential symlinks", true);
 const renderOptions = { localLink: href => localLinks.register(href) };
 check("host opt-in preserves local link label and issues an opaque ID",
@@ -137,7 +145,7 @@ class TreeItem { constructor(label, collapsibleState) { this.label = label; this
 const commands = new Map(), panels = [], terminals = [], errors = [], settingUpdates = [], environmentPicks = [], confirmations = [];
 const openedFiles = [];
 const decorationProviders = new Set();
-let clipboard, tree, view, workspaceChanged, confirmation = "在终端中继续", pickedProfile = "default", pickedTarget, pickedCwd, extension;
+let clipboard, tree, view, workspaceChanged, confirmation = "Resume in terminal", pickedProfile = "default", pickedTarget, pickedCwd, extension;
 const newSessionPicks = [];
 const vscode = {
   Disposable, EventEmitter, Uri, TreeItem, ThemeIcon: class { constructor(id) { this.id = id; } },
@@ -185,6 +193,7 @@ function mountSidebar() {
       async postMessage(response) { this.responses.push(response); return true; },
       async send(message) { await Promise.all([...callbacks].map(callback => callback(message))); return this.responses.findLast(response => response.type === "sessionHub.sidebar.result" && response.id === message.id); },
     },
+    show(preserveFocus) { this.shown = true; this.preserveFocus = preserveFocus; },
     onDidDispose(callback) { disposeCallbacks.add(callback); return new Disposable(() => disposeCallbacks.delete(callback)); },
     dispose() { [...disposeCallbacks].forEach(callback => callback()); },
     callbacks,
@@ -229,7 +238,7 @@ try {
   module._compile(fs.readFileSync(entry, "utf8"), entry);
   extension = module.exports;
   await extension.activate(context);
-  check("compiled activation uses core without HTTP server or detached launcher", errors.length === 0 && tree && commands.size === 7);
+  check("compiled activation uses core without HTTP server or detached launcher", errors.length === 0 && tree && commands.size === 8);
   let sidebar = mountSidebar(), sidebarId = 0;
   const sidebarRequest = (action, fields = {}) => sidebar.webview.send({ type: "sessionHub.sidebar", id: ++sidebarId, action, ...fields });
   const sidebarState = () => sidebar.webview.responses.findLast(response => response.type === "sessionHub.sidebar.state");
@@ -239,6 +248,20 @@ try {
     sidebar.webview.html.includes("connect-src 'none'") && sidebar.webview.html.includes("script-src 'nonce-") &&
     sidebar.webview.html.includes("sidebar.js") && !sidebar.webview.html.includes("{{") &&
     sidebarState().groups.length === 3 && !JSON.stringify(sidebarState()).includes(home));
+  check("search starts collapsed and the magnifier sits left of New Session",
+    sidebarState().searchOpen === false && sidebar.webview.html.includes('id="search-panel"') &&
+    manifest.contributes.menus["view/title"].map(item => item.command).join() === "sessionHub.search,sessionHub.newSession,sessionHub.refresh" &&
+    manifest.contributes.commands.find(item => item.command === "sessionHub.search").icon === "$(search)");
+  await commands.get("sessionHub.search")();
+  check("native search command opens the panel without opening an editor", sidebarState().searchOpen === true && sidebar.shown && panels.length === 0);
+  await sidebarRequest("search", { text: "scopeuserneedle", searchScope: "user" });
+  await commands.get("sessionHub.search")();
+  check("native search command closes the panel and clears the filter", sidebarState().searchOpen === false && sidebarState().search.text === "");
+  await commands.get("sessionHub.search")();
+  await sidebarRequest("closeSearch");
+  assert.equal(sidebarState().searchOpen, false);
+  await commands.get("sessionHub.search")();
+  check("sidebar headings and manifest UI are English", sidebarState().groups.map(group => group.label).join() === "Current Project,Unassigned,Other Projects" && !/\p{Script=Han}/u.test(JSON.stringify(manifest.contributes)));
   const groups = tree.getChildren();
   const current = groups.find(group => group.scope === "current");
   const currentItems = tree.getChildren(current);
@@ -263,6 +286,7 @@ try {
   const response = await request("getSession", { uid: pi.session.uid });
   const detail = response.result;
   check("transcript metadata keeps the full title after tab truncation", detail.title === longPrompt);
+  check("VS Code requests English generated tool labels without changing Chinese prose", detail.messages.some(message => message.role === "toolCall" && message.text.startsWith("Tool:")) && detail.messages.some(message => message.text.includes("以下为虚构的诊断示例")));
   check("postMessage detail keeps Markdown/math/tool activity and redaction", !response.error && detail.messages.some(m => m.html.includes('class="katex"')) && detail.messages.some(m => m.role === "toolCall") && !JSON.stringify(detail).includes("TOOL_SECRET_VALUE"));
   const linkedMessage = detail.messages.find(message => message.text.includes("阅读页：诊断结果"));
   const linkId = linkedMessage.html.match(/data-session-link="([a-f0-9]{32})"/)?.[1];
@@ -295,7 +319,7 @@ try {
   workspaceChanged();
   check("workspace changes re-scope without hiding other project history", tree.getChildren(current).length === 0 && tree.getChildren(groups.find(group => group.scope === "other")).length >= 4);
   check("foreign harness stores remain byte-for-byte unchanged", [...before].every(([file, content]) => fs.readFileSync(file).equals(content)));
-  confirmation = "在终端中继续";
+  confirmation = "Resume in terminal";
   pickedProfile = undefined;
   const terminalCount = terminals.length;
   await commands.get("sessionHub.resume")("pi:unknown-env");
@@ -305,13 +329,13 @@ try {
   check("manual profile choice uses configured dir, not a shell alias or inherited default", terminals.at(-1).options.env.PI_CODING_AGENT_DIR === profiles[2].agentDir && terminals.at(-1).options.shellPath === "pi" && terminals.at(-1).options.shellArgs[1] === unknownSource);
   pickedProfile = "default";
   await commands.get("sessionHub.resume")("pi:conflicting-env");
-  check("conflicting Context cannot silently choose one account", environmentPicks.at(-1).options.placeHolder.includes("多个 Pi 环境") && terminals.at(-1).options.env.PI_CODING_AGENT_DIR === profiles[0].agentDir);
+  check("conflicting Context cannot silently choose one account", environmentPicks.at(-1).options.placeHolder.includes("multiple Pi environments") && terminals.at(-1).options.env.PI_CODING_AGENT_DIR === profiles[0].agentDir);
   const missingDirectory = fs.readFileSync(piSource);
   fs.rmdirSync(profiles[1].agentDir);
   const countBeforeMissing = terminals.length;
   const picksBeforeMissing = environmentPicks.length;
   await commands.get("sessionHub.resume")(pi.session.uid);
-  check("missing detected config directory errors instead of switching to default", terminals.length === countBeforeMissing && environmentPicks.length === picksBeforeMissing && errors.at(-1).includes("源 Pi 配置目录不可用"));
+  check("missing detected config directory errors instead of switching to default", terminals.length === countBeforeMissing && environmentPicks.length === picksBeforeMissing && errors.at(-1).includes("source Pi configuration directory is unavailable"));
   check("environment detection/picking never rewrites a source transcript", fs.readFileSync(piSource).equals(missingDirectory));
 
   // New blank sessions: only executables found on PATH, Pi once per configured
@@ -327,7 +351,7 @@ try {
   vscode.workspace.workspaceFolders = [{ uri: new Uri(project) }];
   try {
     check("+ sits beside refresh in the sidebar title bar",
-      manifest.contributes.menus["view/title"].map(entry => entry.command).join() === "sessionHub.newSession,sessionHub.refresh" &&
+      manifest.contributes.menus["view/title"].map(entry => entry.command).join() === "sessionHub.search,sessionHub.newSession,sessionHub.refresh" &&
       manifest.contributes.commands.find(entry => entry.command === "sessionHub.newSession").icon === "$(add)");
     let terminalCount = terminals.length;
     pickedTarget = undefined;
@@ -340,7 +364,7 @@ try {
     check("new Claude session starts a blank CLI in the workspace folder without resume argv or confirmation",
       terminals.length === terminalCount + 1 && terminals.at(-1).shown && terminals.at(-1).options.shellPath === path.join(bin, "claude") &&
       terminals.at(-1).options.shellArgs.length === 0 && terminals.at(-1).options.cwd === project &&
-      terminals.at(-1).options.env === undefined && terminals.at(-1).options.name.includes("新会话"));
+      terminals.at(-1).options.env === undefined && terminals.at(-1).options.name.includes("New session"));
     pickedTarget = "pi:team";
     await commands.get("sessionHub.newSession")();
     check("new Pi session passes the chosen environment explicitly",
@@ -350,7 +374,7 @@ try {
     pickedTarget = "pi:research";
     await commands.get("sessionHub.newSession")();
     check("missing Pi environment directory errors instead of falling back to default",
-      terminals.length === terminalCount && errors.at(-1).includes("Pi 配置目录不可用"));
+      terminals.length === terminalCount && errors.at(-1).includes("Pi configuration directory is unavailable"));
     vscode.workspace.workspaceFolders = [{ uri: new Uri(project) }, { uri: new Uri(otherProject) }];
     pickedTarget = "claude-code"; pickedCwd = undefined;
     await commands.get("sessionHub.newSession")();
@@ -387,15 +411,51 @@ try {
     return when.endsWith("&& !sessionStarred") ? row.contextValue === "session"
       : when.endsWith("&& sessionStarred") ? row.contextValue === "sessionStarred" : true;
   };
-  const beforeSidebarActions = snapshot();
+  const beforeSearchActions = snapshot();
   for (const [action, fields] of [
     ["open", { uid: "/etc/passwd" }], ["star", { uid: "pi:missing", starred: true }],
     ["star", { uid: pi.session.uid, starred: "yes" }], ["open", { uid: pi.session.uid, path: pi.session.path }],
     ["resume", { uid: pi.session.uid, args: ["bad"] }], ["more", { scope: "unknown" }],
-    ["ready", { uid: pi.session.uid }], ["execute", { command: "bad" }],
+    ["ready", { uid: pi.session.uid }], ["execute", { command: "bad" }], ["closeSearch", { uid: pi.session.uid }],
+    ["search", { text: "query", searchScope: "system" }],
+    ["search", { text: "query" }], ["search", { text: 42, searchScope: "user" }],
+    ["search", { text: "x".repeat(2001), searchScope: "user" }],
+    ["search", { text: "query", searchScope: "all", path: "/etc/passwd" }],
   ]) assert.ok((await sidebarRequest(action, fields)).error);
   check("sidebar rejects unknown UIDs, paths, argv, extra fields and forged actions", true);
   const sidebarRows = () => sidebarState().groups.flatMap(group => group.sessions);
+  check("sidebar starts with prompt-only search and exposes all three scope options",
+    sidebarState().search.searchScope === "user" && sidebar.webview.html.includes('value="conversation"') && sidebar.webview.html.includes('value="all"'));
+  for (const [text, searchScope, expected] of [
+    ["scopeuserneedle", "user", true], ["scopeassistantneedle", "user", false],
+    ["scopeassistantneedle", "conversation", true], ["scopetoolneedle", "conversation", false],
+    ["scopetoolneedle", "all", true], ["scopeoutputneedle", "all", true],
+    [longPrompt, "user", false],
+  ]) {
+    assert.ok(!(await sidebarRequest("search", { text, searchScope })).error);
+    assert.equal(sidebarRows().some(row => row.uid === pi.session.uid), expected, `${searchScope}: ${text}`);
+    assert.deepEqual(sidebarState().search, { text, searchScope });
+  }
+  unchanged(beforeSearchActions);
+  await sidebarRequest("search", { text: "scopeuserneedle", searchScope: "user" });
+  await commands.get("sessionHub.refresh")();
+  check("active search survives an index refresh", sidebarState().search.text === "scopeuserneedle" && sidebarRows().length === 1);
+  await sidebarRequest("search", { text: "  ", searchScope: "user" });
+  assert.ok(sidebarRows().length > 1);
+  const beforeSidebarActions = snapshot();
+  const listSessions = tree.service.listSessions;
+  try {
+    let finishSlow;
+    tree.service.listSessions = query => query.text === "slow"
+      ? new Promise(resolve => { finishSlow = resolve; }) : Promise.resolve([pi.session]);
+    const slow = tree.setSearch("slow", "all");
+    await tree.setSearch("latest", "user");
+    finishSlow([claude.session]); await slow;
+    assert.equal(tree.sidebarSearch.text, "latest");
+    assert.deepEqual(sidebarRows().map(row => row.uid), [pi.session.uid]);
+    check("late search completion cannot overwrite a newer query or scope", true);
+  } finally { tree.service.listSessions = listSessions; await tree.setSearch("", "user"); }
+  unchanged(beforeSidebarActions);
   await sidebarRequest("star", { uid: pi.session.uid, starred: true });
   check("second-row star action publishes confirmed highlighted state without changing source/index bytes", sidebarRows().find(row => row.uid === pi.session.uid).starred === true);
   failStateWrite = true;
@@ -463,6 +523,25 @@ try {
     assert.equal(group.sessions.length, 205);
     assert.equal(new Set(group.sessions.map(row => row.uid)).size, 205);
     check("sidebar pages large groups without dropping or duplicating old sessions", true);
+    const listSessions = tree.service.listSessions;
+    try {
+      tree.sessions = Array.from({ length: 705 }, (_, i) => ({ ...pi.session, uid: `pi:match-${i}`, repo: project, cwd: project }));
+      const offsets = [];
+      tree.service.listSessions = async query => {
+        assert.equal(query.searchScope, "conversation"); offsets.push(query.offset);
+        return tree.sessions.slice(query.offset, query.offset + query.limit);
+      };
+      await sidebarRequest("search", { text: "pagedneedle", searchScope: "conversation" });
+      group = sidebarState().groups.find(g => g.scope === "current");
+      assert.deepEqual(offsets, [0, 500]);
+      assert.equal(group.total, 705); assert.equal(group.sessions.length, 100);
+      await sidebarRequest("star", { uid: "pi:match-704", starred: true });
+      assert.equal(currentRows()[0], "pi:match-704");
+      await sidebarRequest("star", { uid: "pi:match-704", starred: false });
+      await sidebarRequest("more", { scope: "current" });
+      assert.equal(currentRows().length, 200);
+      check("search covers every index page before grouping, star pinning and sidebar pagination", true);
+    } finally { tree.service.listSessions = listSessions; await tree.setSearch("", "user"); }
   } finally { tree.sessions = originalSessions; vscode.workspace.workspaceFolders = originalFolders; tree.rescope(); }
   const oldSidebar = sidebar;
   sidebar = mountSidebar();
@@ -497,7 +576,7 @@ try {
     tree.provideFileDecoration(Uri.from({ scheme: "session-hub", authority: "sessions", path: "/unknown" })) === undefined &&
     tree.provideFileDecoration(claude.resourceUri) === undefined);
   check("star visibly marks the full tree title while preserving UID, icon, description and open action",
-    marked.label === `★ ${longPrompt}` && marked.id === unmarked.id && marked.tooltip.includes("已加星标") &&
+    marked.label === `★ ${longPrompt}` && marked.id === unmarked.id && marked.tooltip.includes("Starred") &&
     marked.contextValue === "sessionStarred" && marked.description === unmarked.description &&
     marked.iconPath.light.fsPath === unmarked.iconPath.light.fsPath && marked.command.arguments[0] === unmarked.id && starChanges === 1);
   check("starred rows offer Unstar and retain Open, Resume and Copy ID menus",
@@ -514,7 +593,7 @@ try {
   const decorationsBeforeFailure = decorationChanges.length;
   await commands.get("sessionHub.unstar")(marked);
   check("failed unstar reports an error without changing visible or durable state",
-    errors.at(-1).includes("无法保存会话星标") && item(pi.session.uid).contextValue === "sessionStarred" &&
+    errors.at(-1).includes("Could not save session stars") && item(pi.session.uid).contextValue === "sessionStarred" &&
     starChanges === changesBeforeFailure && JSON.stringify(JSON.parse(fs.readFileSync(stateFile, "utf8"))) === JSON.stringify(savedStars));
   await commands.get("sessionHub.star")(claude);
   check("failed star never displays an unsaved mark", item(claude.session.uid).contextValue === "session" && starChanges === changesBeforeFailure);
@@ -582,9 +661,9 @@ try {
   const errorsBeforeCorrupt = errors.length;
   context = makeContext();
   await extension.activate(context);
-  check("corrupt saved star state reports an error but does not prevent browsing", errors.length === errorsBeforeCorrupt + 1 && errors.at(-1).includes("无法读取会话星标") && items().length > 0);
+  check("corrupt saved star state reports an error but does not prevent browsing", errors.length === errorsBeforeCorrupt + 1 && errors.at(-1).includes("Could not load starred sessions") && items().length > 0);
   await commands.get("sessionHub.star")(item(pi.session.uid));
-  check("corrupt storage is never silently overwritten by a star command", fs.readFileSync(stateFile, "utf8") === corruptState && errors.at(-1).includes("未覆盖已有数据"));
+  check("corrupt storage is never silently overwritten by a star command", fs.readFileSync(stateFile, "utf8") === corruptState && errors.at(-1).includes("existing data has not been overwritten"));
 
 } finally {
   disposeExtension();
@@ -596,7 +675,7 @@ try {
 const sent = [], listeners = {}, timers = new Map();
 let timerId = 0;
 const sandbox = { window: { addEventListener: (name, callback) => { listeners[name] = callback; } },
-  document: { body: { dataset: { host: "vscode", sessionUid: "pi:bound" } } },
+  document: { documentElement: {}, querySelectorAll: () => [], body: { dataset: { host: "vscode", sessionUid: "pi:bound" } } },
   acquireVsCodeApi: () => ({ postMessage: message => sent.push(message) }),
   setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
   clearTimeout: id => timers.delete(id),
@@ -604,7 +683,7 @@ const sandbox = { window: { addEventListener: (name, callback) => { listeners[na
 };
 vm.runInNewContext(fs.readFileSync(path.join(root, "dist/media/transport.js"), "utf8"), sandbox);
 const transport = sandbox.window.sessionHubTransport;
-check("resume action declares a primary green button and decorative play icon", transport.sessionActions[0].className === "primary-button resume-button" && transport.sessionActions[0].icon === "▶" && transport.sessionActions[0].label === "在终端中继续");
+check("resume action declares a primary green button and decorative play icon", transport.sessionActions[0].className === "primary-button resume-button" && transport.sessionActions[0].icon === "▶" && transport.sessionActions[0].label === "Resume in terminal");
 const pending = transport.getSession("pi:bound");
 check("VscodeTransport uses UID-based postMessage, not fetch", sent[0].operation === "getSession" && sent[0].uid === "pi:bound" && !transport.hasSessionList);
 listeners.message({ data: { type: "sessionHub.response", id: sent[0].id, result: { uid: "pi:bound" } } });
@@ -619,8 +698,8 @@ listeners.message({ data: { type: "sessionHub.response", id: sent.at(-1).id, res
 await linkPending;
 const timeout = transport.refresh();
 [...timers.values()][0]();
-await assert.rejects(() => timeout, /超时/);
+await assert.rejects(() => timeout, /timed out/);
 const closing = transport.status(); listeners.pagehide();
-await assert.rejects(() => closing, /关闭/);
+await assert.rejects(() => closing, /closed/);
 check("transport errors, timeouts and disposal reject pending requests", true);
 console.log(`${checks} VS Code manifest/compiled-host/protocol/transport checks passed.`);

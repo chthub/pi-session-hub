@@ -18,6 +18,8 @@ export interface ListOptions {
 }
 
 export interface SessionReadOptions {
+  /** Locale for generated tool labels only; source-authored text is untouched. */
+  locale?: "en" | "zh-CN";
   preserveFormatting?: boolean;
   /** Recover individual calls/results for the Web Viewer, without changing
    * the existing TUI/context/handoff transcript by default. */

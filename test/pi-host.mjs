@@ -62,7 +62,7 @@ try {
   console.log("PASS Pi context/handoff retain imported-source semantics");
   await commands.get("session-native").handler("pi:11111111", ctx);
   assert.ok(notices.some(note => note.text === "Cancelled"));
-  assert.ok(selections.length === 1 && selections[0].title.includes("Pi 环境"));
+  assert.ok(selections.length === 1 && selections[0].title.includes("Pi environment"));
   assert.ok(confirmations.at(-1).includes(`PI_CODING_AGENT_DIR=${path.join(home, ".pi", "agent")}`));
   console.log("PASS Pi native resume selects unresolved config identity before confirmation");
   await tools.get("session_hub_enable").execute();

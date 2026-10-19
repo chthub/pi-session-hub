@@ -5,15 +5,16 @@
  * Schema: session / message / part. Messages and parts store JSON in a `data`
  * column rather than typed columns.
  *
- * The database on this machine is ~940 MB, so listing reads only the `session`
- * table and never touches `part`. Transcript loading is per-session and uses
- * the `part_session_idx` index.
+ * Listing recovers bounded search excerpts from structured parts at refresh
+ * time. Scope queries use the local FTS index, never reread these source parts.
+ * Transcript loading is per-session and uses the `part_session_idx` index.
  *
  * Native resume uses `opencode --session <id>`, documented in `opencode --help`.
  */
 
 import fs from "node:fs";
 import path from "node:path";
+import { ScopedSearchText } from "./search-content.ts";
 import { readSessionRows, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
@@ -175,9 +176,9 @@ export class OpenCodeAdapter implements SessionAdapter {
           pushCommand(commands, extractCommand(tool, o.state ?? o));
           if (opts.includeToolActivity) {
             const state = o.state && typeof o.state === "object" ? o.state as Record<string, unknown> : o;
-            pushToolCall(messages, tool, "input" in state ? state.input : o.input, o.callID ?? o.call_id ?? o.id, Infinity);
-            if ("output" in state) pushToolResult(messages, state.output, tool, o.callID ?? o.call_id ?? o.id, Infinity);
-            else if ("error" in state) pushToolResult(messages, `错误：${String(state.error)}`, tool, o.callID ?? o.call_id ?? o.id, Infinity);
+            pushToolCall(messages, tool, "input" in state ? state.input : o.input, o.callID ?? o.call_id ?? o.id, Infinity, opts.locale);
+            if ("output" in state) pushToolResult(messages, state.output, tool, o.callID ?? o.call_id ?? o.id, Infinity, opts.locale);
+            else if ("error" in state) pushToolResult(messages, `${opts.locale === "en" ? "Error: " : "错误："}${String(state.error)}`, tool, o.callID ?? o.call_id ?? o.id, Infinity, opts.locale);
           }
           continue;
         }
@@ -274,6 +275,7 @@ export class OpenCodeAdapter implements SessionAdapter {
       toolCount: 0,
       preview,
       searchText: opening.searchText,
+      searchScopes: this.readScopes(db, r.id),
       fidelity: {
         ...emptyFidelity([
           "tool counts and changed files are loaded per session, not at list time",
@@ -338,6 +340,27 @@ export class OpenCodeAdapter implements SessionAdapter {
     }
     if (!preview && searchAcc.length > 0) preview = clip(searchAcc[0], 400);
     return { preview, searchText: searchTextFrom(searchAcc) };
+  }
+
+  /** Full structured pass at index refresh, not at query time. Legacy opening
+   * sampling above deliberately stays unchanged for Pi/Web search. */
+  private readScopes(db: ReadOnlyDb, sessionId: string) {
+    const scoped = new ScopedSearchText();
+    for (const p of readSessionRows<{ data: string; mdata: string | null }>(db,
+      `select p.data, m.data as mdata from part p
+       left join message m on m.id = p.message_id
+       where p.session_id = ? order by p.time_created, p.id`, [sessionId])) {
+      try {
+        const part = JSON.parse(p.data);
+        let role = "unknown";
+        try {
+          const message = p.mdata ? JSON.parse(p.mdata) : null;
+          if (typeof message?.role === "string") role = message.role;
+        } catch { /* unknown author must not be inferred as user/assistant */ }
+        scoped.add(role, [part]);
+      } catch { /* malformed part */ }
+    }
+    return scoped.finish();
   }
 
   /** OpenCode keeps per-session file diffs on disk next to the database. */

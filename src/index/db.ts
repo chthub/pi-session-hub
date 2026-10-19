@@ -8,12 +8,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { ExternalSession, HarnessId, SessionDetail } from "../types.ts";
+import type { ExternalSession, HarnessId, SearchScope, SessionDetail } from "../types.ts";
 import { exec, openIndexDb, type ReadOnlyDb } from "../sqlite.ts";
 
-export const SCHEMA_VERSION = "3";
+export const SCHEMA_VERSION = "4";
 /** Bump when metadata parsing changes; stale fingerprints never bypass parsing. */
-export const PARSER_VERSION = "3";
+export const PARSER_VERSION = "4";
 
 export interface IndexedSessionRow {
   uid: string;
@@ -85,6 +85,13 @@ const SCHEMA = [
      body,
      tokenize='unicode61 remove_diacritics 2'
    )`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS search_scopes USING fts5(
+     uid UNINDEXED,
+     user_text,
+     conversation_text,
+     all_text,
+     tokenize='unicode61 remove_diacritics 2'
+   )`,
 ];
 
 export async function openIndex(dbPath: string): Promise<IndexHandle | null> {
@@ -127,6 +134,7 @@ export async function openIndex(dbPath: string): Promise<IndexHandle | null> {
     db,
     "DELETE FROM search WHERE uid NOT IN (SELECT uid FROM sessions)",
   );
+  exec(db, "DELETE FROM search_scopes WHERE uid NOT IN (SELECT uid FROM sessions)");
   return {
     db,
     close() {
@@ -217,9 +225,9 @@ export function setSourceFingerprint(
 }
 
 /**
- * The text that goes into FTS. Kept deliberately small: title, preview and the
- * session's identifying metadata. Full transcripts are not indexed, which keeps
- * the index tiny and avoids hoarding conversation content on disk.
+ * Legacy FTS body: title, preview, identifying metadata and the bounded prose
+ * excerpt. Kept unchanged for callers that omit searchScope; explicit scopes
+ * use a separate FTS table built from structured source content.
  */
 export function ftsBody(session: ExternalSession): string {
   const parts = [
@@ -279,6 +287,13 @@ export function upsertSessions(handle: IndexHandle, sessions: ExternalSession[])
     if (typeof rowid === "number") {
       // Delete by uid, not just rowid: REPLACE on sessions allocates a new
       // rowid, so a rowid-only delete would leave the previous FTS row behind.
+      exec(handle.db, "DELETE FROM search_scopes WHERE uid = ?", [s.uid]);
+      exec(handle.db, "INSERT INTO search_scopes (rowid, uid, user_text, conversation_text, all_text) VALUES (?,?,?,?,?)", [
+        rowid, s.uid, s.searchScopes?.user ?? "", s.searchScopes?.conversation ?? "",
+        // All includes identifying metadata, but not legacy searchText/preview:
+        // those can contain text whose role is no longer recoverable.
+        [s.searchScopes?.all, s.title, s.repo, s.cwd, s.model, s.harness, s.nativeId].filter(Boolean).join("\n"),
+      ]);
       exec(handle.db, "DELETE FROM search WHERE uid = ?", [s.uid]);
       exec(handle.db, "INSERT INTO search (rowid, uid, title, body) VALUES (?,?,?,?)", [
         rowid,
@@ -293,6 +308,7 @@ export function upsertSessions(handle: IndexHandle, sessions: ExternalSession[])
 export function removeSessions(handle: IndexHandle, uids: string[]): void {
   for (const uid of uids) {
     exec(handle.db, "DELETE FROM search WHERE uid = ?", [uid]);
+    exec(handle.db, "DELETE FROM search_scopes WHERE uid = ?", [uid]);
     exec(handle.db, "DELETE FROM files WHERE uid = ?", [uid]);
     exec(handle.db, "DELETE FROM sessions WHERE uid = ?", [uid]);
   }
@@ -306,6 +322,7 @@ export function allUids(handle: IndexHandle): string[] {
 
 export interface QueryOptions {
   text?: string;
+  searchScope?: SearchScope;
   harness?: HarnessId | null;
   repo?: string | null;
   filePath?: string | null;
@@ -341,8 +358,17 @@ export function querySessions(
 
   const fts = opts.text ? toFtsQuery(opts.text) : null;
   if (fts) {
-    where.push("s.rowid in (select rowid from search where search match ?)");
-    params.push(fts);
+    const columns: Record<SearchScope, string> = { user: "user_text", conversation: "conversation_text", all: "all_text" };
+    const column = opts.searchScope && Object.hasOwn(columns, opts.searchScope) ? columns[opts.searchScope] : null;
+    if (opts.searchScope !== undefined && !column) throw new Error("Invalid search scope");
+    if (column) {
+      where.push("s.rowid in (select rowid from search_scopes where search_scopes match ?)");
+      // Restrict the whole expression, including negations, to this column.
+      params.push(`${column} : (${fts})`);
+    } else {
+      where.push("s.rowid in (select rowid from search where search match ?)");
+      params.push(fts);
+    }
   }
 
   const sql =

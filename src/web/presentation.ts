@@ -12,7 +12,7 @@ export function sessionSummary(session: ExternalSession) {
     messageCount: session.messageCount });
 }
 export function viewerDetail(detail: SessionDetail, options: MarkdownRenderOptions = {}) {
-  const { searchText: _searchText, ...metadata } = detail;
+  const { searchText: _searchText, searchScopes: _searchScopes, ...metadata } = detail;
   return sanitize({ ...metadata, messages: detail.messages.map(message => ({ ...message,
     html: /tool|function/i.test(message.role) ? renderPlainText(message.text) : renderMarkdown(message.text, options) })) });
 }

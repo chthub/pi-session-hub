@@ -33,7 +33,10 @@ try {
     ["claude-code", ClaudeCodeAdapter, { type: "system", sessionId: "large" }, text => ({ type: "user", sessionId: "large", timestamp: stamp, message: { role: "user", content: text } })],
     ["codex", CodexAdapter, { type: "session_meta", payload: { id: "large" } }, text => ({ type: "response_item", timestamp: stamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } })],
   ]) {
-    const file = path.join(temp, `${id}.jsonl`);
+    // Codex refs must remain inside a configured sessions tree; still exercise
+    // the same large-file parser without bypassing the source-path boundary.
+    const file = id === "codex" ? path.join(temp, ".codex", "sessions", `${id}.jsonl`) : path.join(temp, `${id}.jsonl`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     const fd = fs.openSync(file, "w");
     fs.writeSync(fd, JSON.stringify(header) + "\n");
     const row = JSON.stringify(entry(payload)) + "\n";

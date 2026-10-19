@@ -106,26 +106,26 @@ export class PiEnvironmentDetector {
     const evidencePaths = [...this.evidence];
     const base = { choices: this.choices, evidencePaths };
     if (truncated || this.malformed || this.unsupported) return { ...base, status: "unknown", selected: null,
-      reason: truncated ? "会话读取被截断，无法排除后续环境变化，请选择 Pi 环境"
-        : this.malformed ? "系统 Context 结构不完整，请选择 Pi 环境"
-        : "系统 Context 指向未支持的 Pi 配置目录，请选择 Pi 环境" };
+      reason: truncated ? "The session read was truncated; later environment changes cannot be ruled out. Choose a Pi environment."
+        : this.malformed ? "The system context is incomplete. Choose a Pi environment."
+        : "The system context references an unsupported Pi configuration directory. Choose a Pi environment." };
     if (this.detected.size > 1) return { ...base, status: "conflict", selected: null,
-      reason: "会话的系统 Context 包含多个 Pi 环境，请选择本次继续使用的环境" };
+      reason: "The session system context contains multiple Pi environments. Choose one to resume." };
     const selected = this.choices.find(choice => this.detected.has(choice.id)) ?? null;
-    return selected ? { ...base, status: "detected", selected, reason: "根据保存的系统 Context 路径识别" }
-      : { ...base, status: "unknown", selected: null, reason: "会话未保存可识别的 Pi 环境，请手动选择" };
+    return selected ? { ...base, status: "detected", selected, reason: "Detected from saved system context paths" }
+      : { ...base, status: "unknown", selected: null, reason: "No recognizable Pi environment was saved in the session. Choose one manually." };
   }
 }
 
 /** Hosts supply only a picker ID, never an arbitrary environment/path. */
 export function selectPiEnvironment(action: NativeResumeAction, id: string): NativeResumeAction {
   const resolution = action.piEnvironment;
-  if (action.command !== "pi" || !resolution) throw new Error("不是 Pi 环境选择请求");
-  if (resolution.status === "detected" && resolution.selected?.id !== id) throw new Error("不能覆盖已识别的源 Pi 环境");
+  if (action.command !== "pi" || !resolution) throw new Error("Not a Pi environment selection request");
+  if (resolution.status === "detected" && resolution.selected?.id !== id) throw new Error("Cannot override the detected source Pi environment");
   const selected = resolution.choices.find(choice => choice.id === id);
-  if (!selected) throw new Error("无效的 Pi 环境");
+  if (!selected) throw new Error("Invalid Pi environment");
   return { ...action, env: { ...action.env, PI_CODING_AGENT_DIR: selected.agentDir },
-    piEnvironment: { ...resolution, status: "selected", selected, reason: "用户手动选择的 Pi 环境" } };
+    piEnvironment: { ...resolution, status: "selected", selected, reason: "Pi environment selected by the user" } };
 }
 
 /** Directory existence is checked at launch, not guessed or created by Hub. */
@@ -135,12 +135,12 @@ export function assertPiEnvironmentAvailable(action: NativeResumeAction): void {
   if (!profile) return;
   try { if (fs.statSync(profile.agentDir).isDirectory()) return; }
   catch { /* Report the source environment, not an implicit default fallback. */ }
-  throw new Error("源 Pi 配置目录不可用，不会切换到默认账号");
+  throw new Error("The source Pi configuration directory is unavailable; refusing to fall back to the default account");
 }
 
 export function assertPiEnvironmentSelected(action: NativeResumeAction): void {
   if (action.piEnvironment && (!action.piEnvironment.selected ||
       action.env?.PI_CODING_AGENT_DIR !== action.piEnvironment.selected.agentDir)) {
-    throw new Error("必须先选择 Pi 环境，不能继承默认账号配置");
+    throw new Error("Choose a Pi environment first; the default account configuration must not be inherited");
   }
 }

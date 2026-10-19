@@ -8,6 +8,7 @@
 
 import type { ExternalSession, HarnessId } from "../types.ts";
 import type { AdapterRegistry } from "../adapters/registry.ts";
+import type { ListOptions } from "../adapters/types.ts";
 import {
   indexCount,
   markIndexed,
@@ -105,18 +106,36 @@ export async function scan(
         ? new Map(indexedFileSessions(handle, adapter.id).map(s => [s.path, s]))
         : null;
       cachedUids = new Set(cached ? [...cached.values()].map(s => s.uid) : []);
-      sessions = await adapter.listSessions({
+      const relocated = new Set<string>();
+      const listOptions: ListOptions = {
         maxSessions: opts.maxPerHarness,
         onIncomplete: reason => { incomplete = true; gaps.add(reason); },
         reuseUnchanged: cached ? (path, stat) => {
           const prev = cached.get(path);
-          if (prev && prev.mtimeMs === stat.mtimeMs && prev.size === stat.size) {
+          if (prev && !relocated.has(prev.uid) && prev.mtimeMs === stat.mtimeMs && prev.size === stat.size) {
             reused.add(prev);
             return prev;
           }
           return null;
         } : undefined,
-      });
+      };
+      sessions = await adapter.listSessions(listOptions);
+      if (cached?.size && !incomplete) {
+        const sourceUids = new Map(sessions.map(session => [session.path, session.uid]));
+        const uids = new Set(sessions.map(session => session.uid));
+        for (const row of handle.db.all<{ uid: string; path: string }>("select uid, path from sessions where harness = ?", [adapter.id])) {
+          if (uids.has(row.uid) && sourceUids.get(row.path) !== row.uid) relocated.add(row.uid);
+        }
+        // A duplicate's canonical copy was removed or its home unconfigured.
+        // Cached per-source rows contain the old canonical excerpt, not the
+        // surviving copy's text. Reparse just these UIDs before promoting them.
+        // Never infer relocation from a capped or incomplete directory listing.
+        if (relocated.size) {
+          reused.clear();
+          for (const uid of relocated) cachedUids.delete(uid);
+          sessions = await adapter.listSessions(listOptions);
+        }
+      }
       succeeded.add(adapter.id);
       if (incomplete) result.incomplete.push(adapter.id);
       else complete.add(adapter.id);

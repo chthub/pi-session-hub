@@ -1,7 +1,7 @@
 import type { NativeResumeAction } from "../adapters/types.ts";
 import type { QueryOptions } from "../index/db.ts";
 import type { ScanResult } from "../index/scan.ts";
-import type { DetectionResult, ExternalSession, HarnessId } from "../types.ts";
+import type { DetectionResult, ExternalSession, HarnessId, SearchScope } from "../types.ts";
 
 export interface SessionRef {
   uid: string;
@@ -10,7 +10,9 @@ export interface SessionRef {
   path: string;
 }
 
-export type SessionQuery = QueryOptions;
+export interface SessionQuery extends QueryOptions {
+  searchScope?: SearchScope;
+}
 export interface HubStatus {
   total: number;
   indexedAt: string | null;

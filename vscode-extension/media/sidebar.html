@@ -1,15 +1,29 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}'; style-src {{cspSource}}; img-src {{cspSource}}; connect-src 'none'; font-src 'none';">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="{{style}}">
-  <title>会话历史</title>
+  <title>Session History</title>
 </head>
 <body data-vscode-context='{"preventDefaultContextMenuItems":true}'>
-  <p id="status" role="status" aria-live="polite">正在加载会话…</p>
-  <main id="groups" aria-label="按项目分组的会话"></main>
+  <section id="search-panel" class="search-controls" aria-label="Search sessions" hidden>
+    <div class="search-heading"><span>Search sessions</span><button id="search-close" class="icon-button" type="button" title="Close search and clear results" aria-label="Close search">×</button></div>
+    <div class="search-field">
+      <svg class="search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="6.7" cy="6.7" r="4.2"></circle><path d="m9.9 9.9 3.6 3.6"></path></svg>
+      <label class="sr-only" for="search">Search sessions</label>
+      <input id="search" type="search" maxlength="2000" placeholder="Search user prompts…" autocomplete="off" aria-describedby="search-summary">
+    </div>
+    <div class="scope-field"><label for="search-scope">Search in</label><select id="search-scope">
+      <option value="user">User prompts</option>
+      <option value="conversation">User + assistant</option>
+      <option value="all">All content, including tools</option>
+    </select></div>
+    <p id="search-summary" role="status" aria-live="polite">Search local excerpts, not full transcripts.</p>
+  </section>
+  <p id="status" role="status" aria-live="polite">Loading sessions…</p>
+  <main id="groups" aria-label="Sessions by project"></main>
   <script nonce="{{nonce}}" src="{{script}}"></script>
 </body>
 </html>

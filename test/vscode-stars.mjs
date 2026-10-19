@@ -46,20 +46,20 @@ assert.equal(stars.has("jcode:temporarily-missing"), true);
 console.log("PASS star preferences use full namespaced UIDs, survive new instances, preserve absent sessions and serialize writes");
 
 failWrite = true;
-await assert.rejects(stars.set("pi:new", false), /无法保存/);
+await assert.rejects(stars.set("pi:new", false), /Could not save/);
 assert.equal(stars.has("pi:new"), true);
 assert.ok(data.get(SESSION_STARS_KEY).includes("pi:new"));
 failWrite = true;
 const failed = stars.set("pi:failed", true);
 const recovered = stars.set("pi:recovered", true);
-await assert.rejects(failed, /无法保存/);
+await assert.rejects(failed, /Could not save/);
 await recovered;
 assert.equal(stars.has("pi:failed"), false);
 assert.equal(stars.has("pi:recovered"), true);
 // Even a synchronous storage exception must not poison the queue.
 const syncFailure = new SessionStars({ get: state.get, update() { throw new Error("sync failure"); } });
 syncFailure.load();
-await assert.rejects(syncFailure.set("pi:sync", true), /无法保存/);
+await assert.rejects(syncFailure.set("pi:sync", true), /Could not save/);
 assert.equal(syncFailure.has("pi:sync"), false);
 failRead = true;
 await assert.rejects(stars.set("pi:read-failed", true), /storage unavailable/);
@@ -109,14 +109,14 @@ console.log("PASS rejected Memento writes cannot leak cached phantom stars or ma
 
 const beforeInvalid = writes;
 for (const uid of [undefined, {}, "", "native-only", "pi:", "pi:x\ny", "pi:\0", "pi:" + "x".repeat(2000)]) {
-  await assert.rejects(stars.set(uid, true), /无效/);
+  await assert.rejects(stars.set(uid, true), /Invalid/);
 }
 assert.equal(writes, beforeInvalid);
 for (const value of [null, {}, "pi:old", ["pi:valid", 42], ["native-only"]]) {
   data.set(SESSION_STARS_KEY, value);
   const corrupt = new SessionStars(state);
-  assert.throws(() => corrupt.load(), /格式无效/);
-  await assert.rejects(corrupt.set("pi:new", true), /格式无效/);
+  assert.throws(() => corrupt.load(), /Invalid .* format/);
+  await assert.rejects(corrupt.set("pi:new", true), /Invalid .* format/);
   assert.deepEqual(data.get(SESSION_STARS_KEY), value);
 }
 assert.equal(writes, beforeInvalid);

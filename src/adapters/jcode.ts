@@ -11,6 +11,7 @@
  */
 
 import path from "node:path";
+import { ScopedSearchText } from "./search-content.ts";
 import { readSessionJson, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
@@ -94,7 +95,7 @@ export class JCodeAdapter implements SessionAdapter {
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
-      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
+      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity, opts.locale);
       if (!parsed || parsed.session.nativeId !== nativeId) continue;
       return {
         ...parsed.session,
@@ -108,7 +109,7 @@ export class JCodeAdapter implements SessionAdapter {
 
   async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     if (ref.harness !== this.id) return null;
-    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity);
+    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity, opts.locale);
     if (!parsed || parsed.session.uid !== ref.uid) return null;
     return { ...parsed.session, messages: parsed.messages, tools: toSummaries(parsed.tools), commands: parsed.commands };
   }
@@ -125,12 +126,13 @@ export class JCodeAdapter implements SessionAdapter {
     };
   }
 
-  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
+  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false, locale: NonNullable<SessionReadOptions["locale"]> = "zh-CN"): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
     const notes: string[] = withMessages ? [TRANSCRIPT_FORMAT_NOTE] : [];
     const messages = transcriptMessages(notes);
     const searchAcc: string[] = [];
+    const scopedSearch = new ScopedSearchText();
     const toolNames = toolCounter(notes);
     const commands: string[] = [];
     const filesChanged = new Set<string>();
@@ -146,6 +148,7 @@ export class JCodeAdapter implements SessionAdapter {
       messageCount++;
 
       const content = msg.content;
+      scopedSearch.add(role, content);
       const prose: string[] = [];
       if (Array.isArray(content)) {
         for (const block of content) {
@@ -171,7 +174,7 @@ export class JCodeAdapter implements SessionAdapter {
       const joined = withMessages && preserveFormatting ? cleanTranscriptText(prose.join("\n")) : cleanText(prose.join("\n"));
       if (joined) addSearchText(searchAcc, role, joined);
       if (withMessages && includeToolActivity) {
-        pushTranscriptBlocks(messages, role, content, { preserveFormatting, max: Infinity });
+        pushTranscriptBlocks(messages, role, content, { preserveFormatting, max: Infinity }, locale);
         return;
       }
       if (!withMessages && (role !== "user" || messages.length >= 3)) return;
@@ -216,6 +219,7 @@ export class JCodeAdapter implements SessionAdapter {
         toolCount: toolNames.length,
         preview: preview ? clip(preview, 160) : null,
         searchText: searchTextFrom(searchAcc),
+        searchScopes: scopedSearch.finish(),
         fidelity: {
           ...emptyFidelity(notes),
           hasToolCalls: toolNames.length > 0,

@@ -15,7 +15,7 @@ function escapeAttribute(value: string): string {
 /** Generate from the SAME template/assets as the standalone reader. */
 export function viewerHtml(template: string, uid: string, cspSource: string, nonce: string, resource: (file: string) => string): string {
   const csp = `default-src 'none'; script-src 'nonce-${nonce}'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; img-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'`;
-  return template.replace("<head>", `<head>\n  <meta http-equiv="Content-Security-Policy" content="${escapeAttribute(csp)}">`)
+  return template.replace('<html lang="zh-CN">', '<html lang="en">').replace("<head>", `<head>\n  <meta http-equiv="Content-Security-Policy" content="${escapeAttribute(csp)}">`)
     .replace("<body>", `<body data-host="vscode" data-session-uid="${escapeAttribute(uid)}">`)
     .replace(/href="\/(katex\/katex.min.css|style.css)"/g, (_match, file: string) => `href="${escapeAttribute(resource(file))}"`)
     .replace(/<script src="\/(transport.js|app.js)" defer><\/script>/g, (_match, file: string) =>
@@ -31,7 +31,7 @@ export class SessionViewer implements vscode.Disposable {
     const existing = this.panels.get(uid);
     if (existing) { existing.reveal(); return; }
     const session = await this.service.getSessionMetadata(uid);
-    if (!session) throw new Error("会话不存在，请刷新索引");
+    if (!session) throw new Error("Session not found. Refresh the index.");
     // Re-check after the await: simultaneous opens must not create duplicate tabs.
     const concurrent = this.panels.get(uid);
     if (concurrent) { concurrent.reveal(); return; }
@@ -54,10 +54,10 @@ export class SessionViewer implements vscode.Disposable {
             break;
           }
           case "getSession": {
-            const detail = await this.service.getSession(uid, { preserveFormatting: true, includeToolActivity: true });
-            if (!detail) throw new Error("源会话已消失或无法读取");
+            const detail = await this.service.getSession(uid, { preserveFormatting: true, includeToolActivity: true, locale: "en" });
+            if (!detail) throw new Error("The source session no longer exists or cannot be read");
             const nextLinks = new SessionLinks(detail.cwd);
-            response.result = viewerDetail(detail, { localLink: href => nextLinks.register(href) });
+            response.result = viewerDetail(detail, { locale: "en", localLink: href => nextLinks.register(href) });
             links = nextLinks;
             break;
           }
@@ -70,7 +70,7 @@ export class SessionViewer implements vscode.Disposable {
           case "refresh": response.result = await this.refresh(); break;
           case "resume": await this.resume(uid); response.result = { ok: true }; break;
           case "copyId": {
-            if (!(await this.service.getSessionMetadata(uid))) throw new Error("会话不存在");
+            if (!(await this.service.getSessionMetadata(uid))) throw new Error("Session not found");
             await vscode.env.clipboard.writeText(uid);
             response.result = { ok: true };
             break;

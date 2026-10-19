@@ -31,15 +31,15 @@ export class SessionLinks {
 
   resolve(id: string): LocalTarget {
     const target = this.targets.get(id);
-    if (!target || !this.cwd) throw new Error("链接不属于当前会话，请重新读取会话");
+    if (!target || !this.cwd) throw new Error("This link does not belong to the current session. Reload the session.");
     // Revalidate on each click, including symlinks that changed since rendering.
     let root: string, file: string;
     try {
       root = fs.realpathSync(this.cwd);
       file = fs.realpathSync(target.path);
-    } catch { throw new Error("链接文件或会话工作目录已不存在"); }
+    } catch { throw new Error("The linked file or session working directory no longer exists"); }
     if (isDeniedPath(target.path) || isDeniedPath(file) || !inside(root, file) || !fs.statSync(file).isFile()) {
-      throw new Error("链接不在会话项目内或指向受保护的文件");
+      throw new Error("The link is outside the session project or points to a protected file");
     }
     return { ...target, path: file };
   }

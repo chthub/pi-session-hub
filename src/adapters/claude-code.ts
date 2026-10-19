@@ -11,6 +11,7 @@
  */
 
 import path from "node:path";
+import { ScopedSearchText } from "./search-content.ts";
 import { readSessionJsonl, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
@@ -101,7 +102,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
-      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
+      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity, opts.locale);
       if (!parsed || parsed.session.nativeId !== nativeId) continue;
       return {
         ...parsed.session,
@@ -115,7 +116,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
 
   async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     if (ref.harness !== this.id) return null;
-    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity);
+    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity, opts.locale);
     if (!parsed || parsed.session.uid !== ref.uid) return null;
     return { ...parsed.session, messages: parsed.messages, tools: toSummaries(parsed.tools), commands: parsed.commands };
   }
@@ -145,7 +146,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
       requiresConfirmation: true, description: `Resume session ${ref.nativeId.slice(0, 8)} with Claude Code` };
   }
 
-  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
+  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false, locale: NonNullable<SessionReadOptions["locale"]> = "zh-CN"): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
     if (!stat.size) return null;
@@ -162,6 +163,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
 
     const messages = transcriptMessages(read.notes);
     const searchAcc: string[] = [];
+    const scopedSearch = new ScopedSearchText();
     const toolNames = toolCounter(read.notes);
     const commands: string[] = [];
     const filesChanged = new Set<string>();
@@ -189,12 +191,17 @@ export class ClaudeCodeAdapter implements SessionAdapter {
         if (typeof n === "string" && n.trim()) agentName = n.trim();
         continue;
       }
+      if (type === "system") {
+        const system = e.message as Record<string, unknown> | undefined;
+        scopedSearch.add("system", system?.content ?? e.content);
+      }
       if (type !== "user" && type !== "assistant") continue;
 
       const msg = e.message as Record<string, unknown> | undefined;
       if (!msg) continue;
       const role = typeof msg.role === "string" ? msg.role : type;
       const content = msg.content;
+      scopedSearch.add(e.isMeta === true ? "toolResult" : role, content);
 
       if (typeof msg.model === "string" && !model) model = msg.model;
 
@@ -204,7 +211,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
       if (e.isMeta === true && role === "user") {
         if (withMessages && includeToolActivity) {
           const text = proseOnly(content);
-          if (text) pushToolResult(messages, text, undefined, e.sourceToolUseID);
+          if (text) pushToolResult(messages, text, undefined, e.sourceToolUseID, undefined, locale);
         }
         continue;
       }
@@ -237,7 +244,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
       if (role === "assistant") messageCount++;
 
       if (withMessages && includeToolActivity) {
-        pushTranscriptBlocks(messages, role, content, { preserveFormatting, max: Infinity });
+        pushTranscriptBlocks(messages, role, content, { preserveFormatting, max: Infinity }, locale);
         continue;
       }
 
@@ -287,6 +294,7 @@ export class ClaudeCodeAdapter implements SessionAdapter {
         toolCount: toolNames.length,
         preview,
         searchText: searchTextFrom(searchAcc),
+        searchScopes: scopedSearch.finish(),
         fidelity: {
           ...emptyFidelity(
             isSub

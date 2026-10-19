@@ -2,36 +2,42 @@ import * as vscode from "vscode";
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { redact } from "../../src/security.ts";
+import type { SearchScope } from "../../src/types.ts";
 import type { SessionTree } from "./sessionTree.ts";
 import type { ProjectScope } from "./projectScope.ts";
 
 const PAGE_SIZE = 100;
 const SCOPES = ["current", "unscoped", "other"] as const;
-type SidebarAction = "ready" | "more" | "open" | "star" | "resume" | "copyId";
-interface SidebarRequest { type: "sessionHub.sidebar"; id: number; action: SidebarAction; uid?: string; starred?: boolean; scope?: ProjectScope }
+type SidebarAction = "ready" | "search" | "closeSearch" | "more" | "open" | "star" | "resume" | "copyId";
+interface SidebarRequest { type: "sessionHub.sidebar"; id: number; action: SidebarAction; uid?: string; starred?: boolean; scope?: ProjectScope; text?: string; searchScope?: SearchScope }
 
 function parseRequest(value: unknown): SidebarRequest {
-  if (!value || typeof value !== "object") throw new Error("无效的侧栏请求");
+  if (!value || typeof value !== "object") throw new Error("Invalid sidebar request");
   const r = value as Record<string, unknown>;
-  if (r.type !== "sessionHub.sidebar" || !Number.isSafeInteger(r.id) || Number(r.id) < 1) throw new Error("无效的侧栏请求");
+  if (r.type !== "sessionHub.sidebar" || !Number.isSafeInteger(r.id) || Number(r.id) < 1) throw new Error("Invalid sidebar request");
   const keys = ["type", "id", "action"];
   switch (r.action) {
-    case "ready": break;
+    case "ready": case "closeSearch": break;
+    case "search":
+      keys.push("text", "searchScope");
+      if (typeof r.text !== "string" || r.text.length > 2000) throw new Error("Invalid search query (maximum 2,000 characters)");
+      if (!["user", "conversation", "all"].includes(r.searchScope as string)) throw new Error("Unknown search scope");
+      break;
     case "more":
       keys.push("scope");
-      if (!SCOPES.includes(r.scope as ProjectScope)) throw new Error("未知的项目分组");
+      if (!SCOPES.includes(r.scope as ProjectScope)) throw new Error("Unknown project group");
       break;
     case "star":
       keys.push("starred");
-      if (typeof r.starred !== "boolean") throw new Error("无效的星标状态");
+      if (typeof r.starred !== "boolean") throw new Error("Invalid star state");
       // falls through: star requests must also identify a known UID.
     case "open": case "resume": case "copyId":
       keys.push("uid");
-      if (typeof r.uid !== "string" || !r.uid || r.uid.length > 2000) throw new Error("无效的会话 ID");
+      if (typeof r.uid !== "string" || !r.uid || r.uid.length > 2000) throw new Error("Invalid session ID");
       break;
-    default: throw new Error("未知的侧栏操作");
+    default: throw new Error("Unknown sidebar action");
   }
-  if (Object.keys(r).some(key => !keys.includes(key))) throw new Error("侧栏请求包含不允许的字段");
+  if (Object.keys(r).some(key => !keys.includes(key))) throw new Error("Sidebar request contains unexpected fields");
   return r as unknown as SidebarRequest;
 }
 
@@ -40,11 +46,13 @@ function escapeAttribute(value: string): string {
 }
 
 /** The sidebar is a view, not an editor tab or an HTTP server. Its only inputs
- * are validated UIDs/actions; paths and arbitrary commands never cross the API. */
+ * are validated UIDs/actions and bounded search queries; paths and arbitrary
+ * commands never cross the API. */
 export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Disposable {
   private view?: vscode.WebviewView;
   private ready = false;
-  private status: string | undefined = "正在读取会话索引…";
+  private searchOpen = false;
+  private status: string | undefined = "Loading session index…";
   private readonly limits: Record<ProjectScope, number> = { current: PAGE_SIZE, unscoped: PAGE_SIZE, other: PAGE_SIZE };
   private viewDisposables: vscode.Disposable[] = [];
   private readonly changed: vscode.Disposable;
@@ -55,6 +63,19 @@ export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Dispos
 
   set message(value: string | undefined) { this.status = value; this.publish(); }
   get message(): string | undefined { return this.status; }
+
+  async toggleSearch(): Promise<void> {
+    if (!this.view) await vscode.commands.executeCommand("sessionHub.sessions.focus");
+    this.view?.show(true);
+    this.searchOpen = !this.searchOpen;
+    if (!this.searchOpen) await this.clearSearch();
+    else this.publish();
+  }
+
+  private async clearSearch(): Promise<void> {
+    for (const scope of SCOPES) this.limits[scope] = PAGE_SIZE;
+    await this.tree.setSearch("", this.tree.sidebarSearch.searchScope);
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.releaseView();
@@ -67,9 +88,14 @@ export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Dispos
       const response: { type: string; id: number; error?: string } = { type: "sessionHub.sidebar.result", id: Number(id) };
       try {
         const request = parseRequest(value);
-        if (request.uid && !this.tree.hasSession(request.uid)) throw new Error("会话不存在；请刷新后重试");
+        if (request.uid && !this.tree.hasSession(request.uid)) throw new Error("Session not found. Refresh and try again.");
         switch (request.action) {
           case "ready": this.ready = true; this.publish(); break;
+          case "closeSearch": this.searchOpen = false; await this.clearSearch(); break;
+          case "search":
+            for (const scope of SCOPES) this.limits[scope] = PAGE_SIZE;
+            await this.tree.setSearch(request.text!, request.searchScope!);
+            break;
           case "more": this.limits[request.scope!] += PAGE_SIZE; this.publish(); break;
           case "star": await this.tree.setStarred(request.uid!, request.starred!); break;
           case "open": await this.actions.open(request.uid!); break;
@@ -96,7 +122,7 @@ export class SessionSidebar implements vscode.WebviewViewProvider, vscode.Dispos
         dark: view.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "harness", "dark", `${row.harness}.svg`)).toString(),
       } })),
     }));
-    void Promise.resolve(view.webview.postMessage({ type: "sessionHub.sidebar.state", groups, status: this.status ? redact(this.status) : "" })).catch(() => {});
+    void Promise.resolve(view.webview.postMessage({ type: "sessionHub.sidebar.state", groups, search: this.tree.sidebarSearch, searchOpen: this.searchOpen, status: this.status ? redact(this.status) : "" })).catch(() => {});
   }
   private releaseView(): void {
     this.view = undefined; this.ready = false;

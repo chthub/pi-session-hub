@@ -1,13 +1,16 @@
 /**
  * Codex adapter.
  *
- * Source: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+ * Source: configured codexHomes, default ~/.codex, under sessions/YYYY/MM/DD/.
  * Format: undocumented JSONL with `type` + `payload`. Session metadata lives in
  * the `session_meta` record; model comes from `turn_context`; conversation
  * messages are `response_item` records with `payload.type === "message"`.
  */
 
+import fs from "node:fs";
 import path from "node:path";
+import { loadCodexHomes } from "../core/config.ts";
+import { ScopedSearchText } from "./search-content.ts";
 import { readSessionJsonl, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
@@ -18,7 +21,7 @@ import type {
 } from "../types.ts";
 import { emptyFidelity } from "../types.ts";
 import type { ListOptions, NativeResumeAction, SessionAdapter, SessionReadOptions } from "./types.ts";
-import { clip, cleanText, cleanTranscriptText } from "../security.ts";
+import { clip, cleanText, cleanTranscriptText, isDeniedPath } from "../security.ts";
 import {
   addSearchText,
   deriveRepo,
@@ -48,30 +51,55 @@ export class CodexAdapter implements SessionAdapter {
   id = "codex" as const;
   displayName = "Codex";
 
-  private readonly root: string;
-
-  constructor(home: string) {
-    this.root = path.join(home, ".codex", "sessions");
-  }
+  private readonly home: string;
+  constructor(home: string) { this.home = home; }
 
   async detect(): Promise<DetectionResult> {
-    const probe = probePath(this.root);
-    if (probe === "missing") {
-      return { harness: this.id, status: "path_missing", root: this.root, sessionCount: 0 };
+    const roots = loadCodexHomes(this.home).map(home => path.join(home, "sessions"));
+    const probes = roots.map(root => probePath(root));
+    const root = roots.join(path.delimiter);
+    if (!probes.includes("directory")) {
+      return { harness: this.id, status: probes.includes("denied") ? "permission_denied" : "path_missing", root, sessionCount: 0 };
     }
-    if (probe === "denied") {
-      return { harness: this.id, status: "permission_denied", root: this.root, sessionCount: 0 };
-    }
-    return {
-      harness: this.id,
-      status: "available",
-      root: this.root,
-      sessionCount: this.files().length,
-    };
+    const gaps = new Set<string>();
+    const sessionCount = this.files({ onIncomplete: reason => gaps.add(reason) }).length;
+    return { harness: this.id, status: "available", root, sessionCount,
+      ...(gaps.size ? { detail: [...gaps].join("; ") } : {}) };
   }
 
   private files(opts?: ListOptions): string[] {
-    return walkFiles(this.root, { exts: [".jsonl"], onIncomplete: opts?.onIncomplete });
+    const homes = loadCodexHomes(this.home);
+    const seen = new Set<string>();
+    const files: string[] = [];
+    for (const home of homes) {
+      for (const file of walkFiles(path.join(home, "sessions"), { exts: [".jsonl"], onIncomplete: opts?.onIncomplete })) {
+        if (!this.homeForSource(file, homes)) {
+          if (!opts?.onIncomplete) throw new Error("Could not verify a Codex source path");
+          opts.onIncomplete("Could not verify a Codex source path");
+          continue;
+        }
+        const real = fs.realpathSync(file);
+        if (!seen.has(real)) { seen.add(real); files.push(file); }
+      }
+    }
+    return files;
+  }
+
+  /** A source must stay in a configured sessions tree both lexically and after
+   * resolving symlinks. Never select an account from transcript text. */
+  private homeForSource(file: string, homes = loadCodexHomes(this.home)): string | null {
+    if (!path.isAbsolute(file) || path.extname(file) !== ".jsonl" || isDeniedPath(file)) return null;
+    try {
+      const real = fs.realpathSync(file);
+      if (isDeniedPath(real) || !fs.statSync(real).isFile()) return null;
+      for (const home of [...homes].sort((a, b) => b.length - a.length)) {
+        const root = path.join(home, "sessions");
+        if (!inside(root, file)) continue;
+        const realRoot = fs.realpathSync(root);
+        if (!isDeniedPath(realRoot) && inside(realRoot, real)) return home;
+      }
+    } catch { /* Missing, unreadable or escaped sources cannot choose a home. */ }
+    return null;
   }
 
   async listSessions(opts?: ListOptions): Promise<ExternalSession[]> {
@@ -80,7 +108,7 @@ export class CodexAdapter implements SessionAdapter {
 
   async getSession(nativeId: string, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
     for (const file of this.files()) {
-      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity);
+      const parsed = this.parse(file, true, opts.preserveFormatting, opts.includeToolActivity, opts.locale);
       if (!parsed || parsed.session.nativeId !== nativeId) continue;
       return {
         ...parsed.session,
@@ -93,25 +121,42 @@ export class CodexAdapter implements SessionAdapter {
   }
 
   async getSessionByRef(ref: SessionRef, opts: SessionReadOptions = {}): Promise<SessionDetail | null> {
-    if (ref.harness !== this.id) return null;
-    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity);
+    if (ref.harness !== this.id || !this.homeForSource(ref.path)) return null;
+    const parsed = this.parse(ref.path, true, opts.preserveFormatting, opts.includeToolActivity, opts.locale);
     if (!parsed || parsed.session.uid !== ref.uid) return null;
     return { ...parsed.session, messages: parsed.messages, tools: toSummaries(parsed.tools), commands: parsed.commands };
   }
 
   async buildNativeResume(nativeId: string): Promise<NativeResumeAction | null> {
+    for (const file of this.files()) {
+      const parsed = this.parse(file, false);
+      if (parsed?.session.nativeId !== nativeId) continue;
+      const home = this.homeForSource(file);
+      if (home) return this.resumeAction(parsed.session, home);
+    }
+    return null;
+  }
+
+  async buildNativeResumeByRef(ref: SessionRef): Promise<NativeResumeAction | null> {
+    if (ref.harness !== this.id) return null;
+    const home = this.homeForSource(ref.path);
+    if (!home) return null;
+    const parsed = this.parse(ref.path, false);
+    if (!parsed || parsed.session.uid !== ref.uid || parsed.session.nativeId !== ref.nativeId) return null;
+    return this.resumeAction(parsed.session, home);
+  }
+
+  private resumeAction(session: ExternalSession, home: string): NativeResumeAction {
     return {
-      command: "codex",
-      args: ["resume", nativeId],
-      verificationBasis: "cli-help",
-      verified: true,
-      verificationNote: "subcommand documented in `codex resume --help`",
+      command: "codex", args: ["resume", session.nativeId], cwd: session.cwd ?? undefined,
+      env: { CODEX_HOME: home }, verificationBasis: "cli-help", verified: true,
+      verificationNote: "subcommand documented in `codex resume --help`; CODEX_HOME selected from the indexed source path",
       requiresConfirmation: true,
-      description: `Resume session ${nativeId.slice(0, 8)} with Codex`,
+      description: `Resume session ${session.nativeId.slice(0, 8)} with Codex (CODEX_HOME=${home})`,
     };
   }
 
-  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false): Parsed | null {
+  private parse(file: string, withMessages: boolean, preserveFormatting = false, includeToolActivity = false, locale: NonNullable<SessionReadOptions["locale"]> = "zh-CN"): Parsed | null {
     const stat = safeStat(file);
     if (!stat) return null;
     if (!stat.size) return null;
@@ -127,6 +172,7 @@ export class CodexAdapter implements SessionAdapter {
 
     const messages = transcriptMessages(read.notes);
     const searchAcc: string[] = [];
+    const scopedSearch = new ScopedSearchText();
     const toolNames = toolCounter(read.notes);
     const commands: string[] = [];
     const filesChanged = new Set<string>();
@@ -148,11 +194,15 @@ export class CodexAdapter implements SessionAdapter {
         if (typeof payload.cwd === "string") cwd = payload.cwd;
         if (typeof payload.cli_version === "string") cliVersion = payload.cli_version;
         if (typeof payload.timestamp === "string") createdAt = parseIso(payload.timestamp);
+        const instructions = payload.base_instructions as Record<string, unknown> | undefined;
+        scopedSearch.add("system", typeof payload.base_instructions === "string" ? payload.base_instructions : instructions?.text);
         continue;
       }
       if (type === "turn_context") {
         if (typeof payload.model === "string") model = payload.model;
         if (typeof payload.cwd === "string" && !cwd) cwd = payload.cwd;
+        scopedSearch.add("system", payload.developer_instructions);
+        scopedSearch.add("system", payload.user_instructions);
         continue;
       }
       if (type !== "response_item") continue;
@@ -160,25 +210,29 @@ export class CodexAdapter implements SessionAdapter {
       const ptype = payload.type;
       if (ptype === "reasoning") {
         hasReasoning = true;
+        scopedSearch.reasoning(payload.summary ?? payload.content);
         continue;
       }
       if (ptype === "custom_tool_call" || ptype === "function_call") {
         const name = typeof payload.name === "string" ? payload.name : "tool";
         toolNames.push(name);
         const rawArgs = payload.arguments ?? payload.input;
+        scopedSearch.call(name, rawArgs);
         collectPaths(rawArgs, filesChanged, filesRead);
         pushCommand(commands, extractCommand(name, rawArgs));
-        if (withMessages && includeToolActivity) pushToolCall(messages, name, "arguments" in payload ? payload.arguments : payload.input, payload.call_id ?? payload.id, Infinity);
+        if (withMessages && includeToolActivity) pushToolCall(messages, name, "arguments" in payload ? payload.arguments : payload.input, payload.call_id ?? payload.id, Infinity, locale);
         continue;
       }
       if (ptype === "custom_tool_call_output" || ptype === "function_call_output") {
         hasToolResults = true;
-        if (withMessages && includeToolActivity) pushToolResult(messages, payload.output, payload.name, payload.call_id, Infinity);
+        scopedSearch.result(payload.output);
+        if (withMessages && includeToolActivity) pushToolResult(messages, payload.output, payload.name, payload.call_id, Infinity, locale);
         continue;
       }
       if (ptype !== "message") continue;
 
       const role = typeof payload.role === "string" ? payload.role : "";
+      scopedSearch.add(role, payload.content);
       if (role !== "user" && role !== "assistant") continue;
       const prose = proseOnly(payload.content);
       if (!prose) continue;
@@ -223,6 +277,7 @@ export class CodexAdapter implements SessionAdapter {
         toolCount: toolNames.length,
         preview: preview ? clip(preview, 160) : null,
         searchText: searchTextFrom(searchAcc),
+        searchScopes: scopedSearch.finish(),
         fidelity: {
           ...emptyFidelity(read.notes),
           hasToolCalls: toolNames.length > 0,
@@ -239,6 +294,11 @@ export class CodexAdapter implements SessionAdapter {
       commands,
     };
   }
+}
+
+function inside(root: string, file: string): boolean {
+  const relative = path.relative(root, file);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 function proseOnly(content: unknown): string {

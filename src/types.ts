@@ -5,6 +5,9 @@
  * writes to any external harness store: this module is pure data description.
  */
 
+/** Explicit indexed content selection; omission retains legacy search. */
+export type SearchScope = "user" | "conversation" | "all";
+
 export type HarnessId =
   | "pi"
   | "claude-code"
@@ -70,6 +73,9 @@ export interface ExternalSession {
    * not enough to answer "where did we discuss X".
    */
   searchText: string | null;
+  /** Index-only role-scoped excerpts, recovered from structured source fields.
+   * Absent for cached metadata/third-party adapters; never infer roles from preview. */
+  searchScopes?: Record<SearchScope, string | null>;
   fidelity: Fidelity;
   /** Source fingerprint, used for incremental reindexing. */
   mtimeMs: number;

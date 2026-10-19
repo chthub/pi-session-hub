@@ -10,6 +10,7 @@
  */
 
 import path from "node:path";
+import { ScopedSearchText } from "./search-content.ts";
 import { readSessionRows, transcriptMessages, toolCounter, TRANSCRIPT_FORMAT_NOTE } from "./reader.ts";
 import type { SessionRef } from "../core/types.ts";
 import type {
@@ -139,7 +140,7 @@ export class CrushAdapter implements SessionAdapter {
         if (toolResult) hasToolResults = true;
         for (const t of tools) toolNames.push(t);
         pushCommand(commands, command);
-        if (opts.includeToolActivity) pushTranscriptBlocks(messages, m.role, parts, { ...opts, max: Infinity });
+        if (opts.includeToolActivity) pushTranscriptBlocks(messages, m.role, parts, { ...opts, max: Infinity }, opts.locale);
         else {
           const clean = opts.preserveFormatting ? cleanTranscriptText(text) : cleanText(text);
           if (clean) messages.push({ role: m.role, text: clip(clean, 4000) });
@@ -232,6 +233,12 @@ export class CrushAdapter implements SessionAdapter {
       }
     }
 
+    const scopedSearch = new ScopedSearchText();
+    for (const m of readSessionRows<{ role: string; parts: string }>(db,
+      "select role, parts from messages where session_id = ? order by created_at, id", [r.id])) {
+      try { scopedSearch.add(m.role, JSON.parse(m.parts)); } catch { /* malformed parts */ }
+    }
+
     const title = (r.title ?? "").trim();
     return {
       uid: `crush:${r.id}`,
@@ -249,6 +256,7 @@ export class CrushAdapter implements SessionAdapter {
       toolCount: 0,
       preview,
       searchText: searchTextFrom(searchAcc),
+      searchScopes: scopedSearch.finish(),
       fidelity: {
         ...emptyFidelity(["Crush does not record the session working directory"]),
         hasToolCalls: true,

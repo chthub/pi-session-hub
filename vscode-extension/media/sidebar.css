@@ -39,8 +39,28 @@ body {
   font: var(--vscode-font-size, 13px)/1.5 var(--font-ui);
   overflow-wrap: anywhere;
 }
-button, summary { font: inherit; color: inherit; cursor: pointer; }
-button:focus-visible, summary:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+button, summary, input, select { font: inherit; color: inherit; }
+button, summary, select { cursor: pointer; }
+button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+[hidden] { display: none !important; }
+.search-controls {
+  margin: 7px 8px 10px; padding: 9px;
+  border: 1px solid var(--vscode-widget-border, var(--border)); border-radius: 6px;
+  background: color-mix(in srgb, var(--hover) 35%, var(--surface));
+}
+.search-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -3px -3px 7px 0; font-size: 11px; font-weight: 600; }
+.icon-button { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font-size: 18px; line-height: 20px; }
+.icon-button:hover { color: var(--foreground); background: var(--hover); }
+.search-field { position: relative; }
+.search-icon { position: absolute; top: 8px; left: 8px; width: 15px; height: 15px; stroke: var(--muted); stroke-width: 1.4; pointer-events: none; }
+.search-controls input, .search-controls select { display: block; width: 100%; min-width: 0; border: 1px solid var(--vscode-input-border, var(--border)); border-radius: 3px; }
+.search-controls input { height: 32px; padding: 5px 6px 5px 29px; background: var(--vscode-input-background, var(--surface)); color: var(--vscode-input-foreground, var(--foreground)); }
+.search-controls input::placeholder { color: var(--vscode-input-placeholderForeground, var(--muted)); }
+.scope-field { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.scope-field label { flex: none; color: var(--muted); font-size: 11px; }
+.search-controls select { flex: 1; height: 28px; padding: 3px 4px; font-size: 11px; background: var(--vscode-dropdown-background, var(--surface)); color: var(--vscode-dropdown-foreground, var(--foreground)); }
+#search-summary { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 button:disabled { cursor: wait; opacity: .65; }
 #status { margin: 8px 10px; overflow-wrap: anywhere; }
 #status:empty { display: none; }
@@ -54,9 +74,10 @@ button:disabled { cursor: wait; opacity: .65; }
 .session-card {
   margin: 4px 6px; padding: 4px 6px;
   border: 1px solid var(--border); border-left: 3px solid var(--border);
-  border-radius: 4px; min-width: 0; overflow-wrap: anywhere;
+  border-radius: 4px; min-width: 0; overflow-wrap: anywhere; cursor: pointer;
 }
 .session-card:hover { background: var(--hover); }
+.session-card:focus-within { outline: 1px solid var(--focus); outline-offset: -1px; }
 .session-title {
   display: block; width: 100%; min-width: 0; padding: 0 2px;
   text-align: left; border: 0; background: transparent;

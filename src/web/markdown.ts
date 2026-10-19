@@ -67,10 +67,10 @@ md.block.ruler.before("fence", "hub_math_block", (state, start, end, silent) => 
   return false;
 }, { alt: ["paragraph", "reference", "blockquote", "list"] });
 
-md.renderer.rules.hub_math = (tokens, index) => {
+md.renderer.rules.hub_math = (tokens, index, _options, env: MarkdownRenderOptions) => {
   const token = tokens[index];
   try {
-    if (token.content.length > 20000) throw new Error("公式超过长度上限");
+    if (token.content.length > 20000) throw new Error("Math exceeds the length limit");
     return katex.renderToString(token.content, {
       displayMode: token.block,
       throwOnError: true,
@@ -84,18 +84,20 @@ md.renderer.rules.hub_math = (tokens, index) => {
       output: "htmlAndMathml",
     });
   } catch {
-    return `<span class="math-error">公式无法渲染：<code>${md.utils.escapeHtml(token.content)}</code></span>`;
+    return `<span class="math-error">${env.locale === "en" ? "Unable to render math: " : "公式无法渲染："}<code>${md.utils.escapeHtml(token.content)}</code></span>`;
   }
 };
 
 export interface MarkdownRenderOptions {
+  /** UI placeholders only; never translate transcript content. Defaults to Chinese. */
+  locale?: "en" | "zh-CN";
   /** Host-issued opaque ID; never a client-supplied filesystem path. */
   localLink?: (href: string) => string | undefined;
 }
 
 // Never fetch images from a transcript (tracking URLs and local network probes).
-md.renderer.rules.image = (tokens, index) =>
-  `<span class="image-placeholder">[图片：${md.utils.escapeHtml(tokens[index].content)}]</span>`;
+md.renderer.rules.image = (tokens, index, _options, env: MarkdownRenderOptions) =>
+  `<span class="image-placeholder">[${env.locale === "en" ? "Image: " : "图片："}${md.utils.escapeHtml(tokens[index].content)}]</span>`;
 
 md.renderer.rules.link_open = (tokens, index, options, env: MarkdownRenderOptions, renderer) => {
   const token = tokens[index];

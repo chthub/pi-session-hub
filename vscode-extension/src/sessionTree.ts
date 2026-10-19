@@ -1,10 +1,11 @@
 import * as vscode from "vscode";
 import { createHash } from "node:crypto";
 import type { SessionHubService } from "../../src/core/service.ts";
-import { HARNESS_LABEL, type ExternalSession } from "../../src/types.ts";
+import { HARNESS_LABEL, type ExternalSession, type SearchScope } from "../../src/types.ts";
 import { redact } from "../../src/security.ts";
 import { sessionProjectScope, type ProjectScope } from "./projectScope.ts";
 import type { SessionStars } from "./sessionStars.ts";
+import { sessionRecency } from "./sessionTime.ts";
 
 /** Decoration-only identity: never expose the source path or claim a real file. */
 function sessionResource(uid: string): vscode.Uri {
@@ -17,14 +18,14 @@ export class SessionTreeItem extends vscode.TreeItem {
     this.id = session.uid;
     this.resourceUri = sessionResource(session.uid);
     this.contextValue = starred ? "sessionStarred" : "session";
-    this.description = `${HARNESS_LABEL[session.harness]} · ${recency(session.updatedAt ?? session.createdAt)}`;
-    this.tooltip = redact([starred ? "已加星标" : null, HARNESS_LABEL[session.harness], session.model, session.repo || session.cwd,
-      session.nativeId, `${session.messageCount} 条消息`].filter(Boolean).join("\n"));
+    this.description = `${HARNESS_LABEL[session.harness]} · ${sessionRecency(session.updatedAt ?? session.createdAt)}`;
+    this.tooltip = redact([starred ? "Starred" : null, HARNESS_LABEL[session.harness], session.model, session.repo || session.cwd,
+      session.nativeId, `${session.messageCount} messages`].filter(Boolean).join("\n"));
     this.iconPath = {
       light: vscode.Uri.joinPath(extensionUri, "media", "harness", "light", `${session.harness}.svg`),
       dark: vscode.Uri.joinPath(extensionUri, "media", "harness", "dark", `${session.harness}.svg`),
     };
-    this.command = { command: "sessionHub.open", title: "打开会话", arguments: [session.uid] };
+    this.command = { command: "sessionHub.open", title: "Open Session", arguments: [session.uid] };
   }
 }
 class GroupItem extends vscode.TreeItem {
@@ -35,15 +36,6 @@ class GroupItem extends vscode.TreeItem {
   }
 }
 type Node = SessionTreeItem | GroupItem;
-function recency(value: string | null): string {
-  const time = value ? Date.parse(value) : NaN;
-  if (!Number.isFinite(time)) return "时间未知";
-  const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes} 分钟前`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;
-  return `${Math.floor(minutes / 1440)} 天前`;
-}
 
 export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDecorationProvider, vscode.Disposable {
   private readonly change = new vscode.EventEmitter<Node | undefined>();
@@ -52,6 +44,11 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
   readonly onDidChangeFileDecorations = this.decorationsChanged.event;
   private decorationUids = new Map<string, string>();
   private sessions: ExternalSession[] = [];
+  private searchVersion = 0;
+  private requestedSearch = { text: "", searchScope: "user" as SearchScope };
+  private appliedSearch = this.requestedSearch;
+  private matches?: Set<string>;
+  get sidebarSearch(): Readonly<{ text: string; searchScope: SearchScope }> { return this.appliedSearch; }
   constructor(private readonly service: SessionHubService, private readonly roots: () => string[],
     private readonly extensionUri: vscode.Uri, private readonly stars: SessionStars) {}
 
@@ -67,10 +64,31 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
     this.sessions = sessions;
     this.decorationUids = new Map(sessions.map(session => [sessionResource(session.uid).toString(), session.uid]));
     this.decorationsChanged.fire(undefined);
+    await this.setSearch(this.requestedSearch.text, this.requestedSearch.searchScope);
+  }
+  /** Query every index page before grouping/pinning/slicing sidebar results.
+   * Newer requests always win, including searches racing an index refresh. */
+  async setSearch(text: string, searchScope: SearchScope = "user"): Promise<void> {
+    const version = ++this.searchVersion;
+    const query = { text: text.trim(), searchScope };
+    this.requestedSearch = query;
+    let matches: Set<string> | undefined;
+    if (query.text) {
+      matches = new Set();
+      for (let offset = 0; ; offset += 500) {
+        const page = await this.service.listSessions({ ...query, limit: 500, offset });
+        if (version !== this.searchVersion) return;
+        for (const session of page) matches.add(session.uid);
+        if (page.length < 500) break;
+      }
+    }
+    if (version !== this.searchVersion) return;
+    this.matches = matches;
+    this.appliedSearch = query;
     this.change.fire(undefined);
   }
   async setStarred(uid: string, starred: boolean): Promise<void> {
-    if (!this.sessions.some(session => session.uid === uid)) throw new Error("会话不存在；请刷新后重试");
+    if (!this.sessions.some(session => session.uid === uid)) throw new Error("Session not found. Refresh and try again.");
     await this.stars.set(uid, starred);
     this.decorationsChanged.fire(sessionResource(uid));
     this.change.fire(undefined);
@@ -78,7 +96,7 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
   provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
     const uid = this.decorationUids.get(uri.toString());
     if (!uid || !this.stars.has(uid)) return undefined;
-    return { color: new vscode.ThemeColor("sessionHub.starredForeground"), tooltip: "已加星标", propagate: false };
+    return { color: new vscode.ThemeColor("sessionHub.starredForeground"), tooltip: "Starred", propagate: false };
   }
   hasSession(uid: string): boolean { return this.sessions.some(session => session.uid === uid); }
   /** Stable partition of the index's newest-first order. Never mutate the cache:
@@ -94,13 +112,15 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
     const roots = this.roots();
     const buckets: Record<ProjectScope, ExternalSession[]> = { current: [], unscoped: [], other: [] };
     // Pin before slicing pages so even old stars appear on the first page.
-    for (const session of this.orderedSessions()) buckets[sessionProjectScope(session, roots)].push(session);
-    return ([["current", "当前项目"], ["unscoped", "项目未识别"], ["other", "其他项目"]] as const).map(([scope, label]) => ({
+    for (const session of this.orderedSessions()) {
+      if (!this.matches || this.matches.has(session.uid)) buckets[sessionProjectScope(session, roots)].push(session);
+    }
+    return ([["current", "Current Project"], ["unscoped", "Unassigned"], ["other", "Other Projects"]] as const).map(([scope, label]) => ({
       scope, label, total: buckets[scope].length,
       sessions: buckets[scope].slice(0, limits[scope]).map(session => ({
         uid: session.uid, title: redact(session.title || session.preview || session.nativeId),
         harness: session.harness, harnessLabel: HARNESS_LABEL[session.harness],
-        recency: recency(session.updatedAt ?? session.createdAt), starred: this.stars.has(session.uid),
+        recency: sessionRecency(session.updatedAt ?? session.createdAt), starred: this.stars.has(session.uid),
       })),
     }));
   }
@@ -108,11 +128,11 @@ export class SessionTree implements vscode.TreeDataProvider<Node>, vscode.FileDe
   getTreeItem(node: Node): vscode.TreeItem { return node; }
   getChildren(node?: Node): Node[] {
     const roots = this.roots();
-    const groups: [ProjectScope, string][] = [["current", "当前项目"], ["unscoped", "项目未识别"], ["other", "其他项目"]];
+    const groups: [ProjectScope, string][] = [["current", "Current Project"], ["unscoped", "Unassigned"], ["other", "Other Projects"]];
     if (node instanceof SessionTreeItem) return [];
     if (node) return this.orderedSessions().filter(session => sessionProjectScope(session, roots) === node.scope).map(session => new SessionTreeItem(session, this.extensionUri, this.stars.has(session.uid)));
     return groups.map(([scope, label]) => new GroupItem(scope, label,
       this.sessions.filter(session => sessionProjectScope(session, roots) === scope).length));
   }
-  dispose(): void { this.change.dispose(); this.decorationsChanged.dispose(); this.decorationUids.clear(); }
+  dispose(): void { this.searchVersion++; this.change.dispose(); this.decorationsChanged.dispose(); this.decorationUids.clear(); }
 }

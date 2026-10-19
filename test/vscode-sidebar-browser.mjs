@@ -63,24 +63,34 @@ try {
   await cdp("Page.enable"); await cdp("Runtime.enable"); await cdp("Network.enable");
   await cdp("Emulation.setDeviceMetricsOverride", { width: 320, height: 700, deviceScaleFactor: 1, mobile: false });
   await cdp("Page.addScriptToEvaluateOnNewDocument", { source: `
-    window.requests = []; window.savedState = {}; window.failNextStar = false;
-    const rows = Array.from({length:205}, (_, i) => ({uid:'pi:row-'+i, title:i === 0 ? '修复会话索引与大文件读取 <img src=x onerror="window.injected=true"> 中文标题与超长标识符_identifier_'.repeat(4) : '第'+i+'条会话：检查实现并解释结果', harness:'pi', harnessLabel:'Pi', recency:'3 分钟前', starred:false, icons:{light:${JSON.stringify(origin + "/harness/light/pi.svg")},dark:${JSON.stringify(origin + "/harness/dark/pi.svg")}}}));
-    let limit = 100;
+    window.requests = []; window.savedState = JSON.parse(sessionStorage.getItem('sidebar-state') || '{}'); window.failNextStar = false;
+    const rows = Array.from({length:205}, (_, i) => ({uid:'pi:row-'+i, title:i === 0 ? '修复会话索引与大文件读取 <img src=x onerror="window.injected=true"> 中文标题与超长标识符_identifier_'.repeat(4) : '第'+i+'条会话：检查实现并解释结果', harness:'pi', harnessLabel:'Pi', recency:'3 minutes ago', starred:false, icons:{light:${JSON.stringify(origin + "/harness/light/pi.svg")},dark:${JSON.stringify(origin + "/harness/dark/pi.svg")}}}));
+    let limit = 100, searchQuery = {text:'', searchScope:'user'}, searchOpen=sessionStorage.getItem('host-search-open')==='true';
     const send = data => window.dispatchEvent(new MessageEvent('message',{data}));
-    function publish() { const ordered=rows.filter(row=>row.starred).concat(rows.filter(row=>!row.starred)); send({type:'sessionHub.sidebar.state',status:'',groups:[{scope:'current',label:'当前项目',total:205,sessions:ordered.slice(0,limit)},{scope:'unscoped',label:'项目未识别',total:0,sessions:[]},{scope:'other',label:'其他项目',total:0,sessions:[]}]}); }
-    window.acquireVsCodeApi = () => ({getState:()=>window.savedState,setState:value=>{window.savedState=structuredClone(value);},postMessage:request=>{
+    function publish() {
+      const matches=rows.filter((row,i)=>!searchQuery.text || searchQuery.text==='allrows' ||
+        searchQuery.text==='userneedle'&&i===0 || searchQuery.text==='assistantneedle'&&searchQuery.searchScope!=='user'&&i===1 ||
+        searchQuery.text==='toolneedle'&&searchQuery.searchScope==='all'&&i===2);
+      const ordered=matches.filter(row=>row.starred).concat(matches.filter(row=>!row.starred));
+      send({type:'sessionHub.sidebar.state',search:{...searchQuery},searchOpen,status:'',groups:[{scope:'current',label:'Current Project',total:matches.length,sessions:ordered.slice(0,limit)},{scope:'unscoped',label:'Unassigned',total:0,sessions:[]},{scope:'other',label:'Other Projects',total:0,sessions:[]}]});
+    }
+    window.toggleSidebarSearch=()=>{searchOpen=!searchOpen;sessionStorage.setItem('host-search-open',String(searchOpen));if(!searchOpen){searchQuery.text='';limit=100;}publish();};
+    window.acquireVsCodeApi = () => ({getState:()=>window.savedState,setState:value=>{window.savedState=structuredClone(value);sessionStorage.setItem('sidebar-state',JSON.stringify(value));},postMessage:request=>{
       window.requests.push(request);
       setTimeout(()=>{
         let error;
-        if(request.action === 'star') { if(window.failNextStar){window.failNextStar=false;error='模拟保存失败';}else{rows.find(row=>row.uid===request.uid).starred=request.starred;publish();} }
+        if(request.action === 'star') { if(window.failNextStar){window.failNextStar=false;error='Simulated save failure';}else{rows.find(row=>row.uid===request.uid).starred=request.starred;publish();} }
         if(request.action === 'more'){limit+=100;publish();}
         if(request.action === 'ready') publish();
+        if(request.action === 'closeSearch'){searchOpen=false;searchQuery.text='';limit=100;sessionStorage.setItem('host-search-open','false');publish();}
+        if(request.action === 'search') {searchQuery={text:request.text,searchScope:request.searchScope};limit=100;publish();}
         send({type:'sessionHub.sidebar.result',id:request.id,error});
       },10);
     }});
   ` });
   await cdp("Page.navigate", { url: origin + "/" });
   await wait('document.querySelectorAll(".session-card").length === 100');
+  check("search controls are collapsed by default without leaving layout space", await evaluate(`document.querySelector('#search-panel').hidden && document.querySelector('#search-panel').getClientRects().length===0 && document.documentElement.lang==='en'`));
   check("sidebar initially renders bounded two-line cards with a persistent second-row star button", await evaluate(`(() => {
     const card=document.querySelector('.session-card'), title=card.querySelector('.session-title'), meta=card.querySelector('.session-meta'), star=card.querySelector('.star-button');
     const a=title.getBoundingClientRect(), b=meta.getBoundingClientRect(), c=star.getBoundingClientRect();
@@ -133,7 +143,7 @@ try {
   await evaluate(`document.body.style.setProperty('--vscode-sessionHub-starredForeground','#ff00ff')`);
   check("VS Code custom star color also controls the two-line card", await evaluate(`getComputedStyle(document.querySelector('.session-title')).color==='rgb(255, 0, 255)'`));
   await evaluate(`window.failNextStar=true;document.querySelector('.star-button').click()`);
-  await wait(`document.querySelector('#status').textContent==='模拟保存失败' && !document.querySelector('.star-button').disabled`);
+  await wait(`document.querySelector('#status').textContent==='Simulated save failure' && !document.querySelector('.star-button').disabled`);
   check("save failure keeps the highlighted state and presents a visible error", await evaluate(`document.querySelector('.session-card').classList.contains('is-starred') && document.querySelector('#status').classList.contains('error')`));
   await evaluate(`document.querySelector('.star-button').focus()`);
   await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
@@ -144,6 +154,15 @@ try {
   await evaluate(`document.querySelector('.session-title').click()`);
   await wait(`window.requests.some(r=>r.action==='open'&&r.uid==='pi:row-0')`);
   check("title click opens the correct conversation independently of starring", true);
+  await wait(`!document.querySelector('.session-title').disabled`);
+  await evaluate(`window.openCount=window.requests.filter(r=>r.action==='open').length;document.querySelector('.session-meta').click()`);
+  await wait(`window.requests.filter(r=>r.action==='open').length===window.openCount+1 && !document.querySelector('.session-title').disabled`);
+  check("second-row metadata and blank area open the conversation exactly once", await evaluate(`window.requests.at(-1).uid==='pi:row-0'`));
+  const padding = await evaluate(`(() => {window.openCount=window.requests.filter(r=>r.action==='open').length;const r=document.querySelector('.session-card').getBoundingClientRect();return {x:r.left+2,y:r.top+2};})()`);
+  await cdp('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...padding});
+  await cdp('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...padding});
+  await wait(`window.requests.filter(r=>r.action==='open').length===window.openCount+1 && !document.querySelector('.session-title').disabled`);
+  check("card padding is clickable, while the star remains a separate action", true);
   await evaluate(`document.querySelector('[data-uid="pi:row-50"]').scrollIntoView(); window.scrollBeforeStar=scrollY;document.querySelector('[data-uid="pi:row-50"] .star-button').click()`);
   await wait(`document.querySelector('[data-uid="pi:row-50"]').classList.contains('is-starred') && !document.querySelector('[data-uid="pi:row-50"] .star-button').disabled`);
   check("star updates preserve scroll position in a long list", await evaluate(`Math.abs(scrollY-window.scrollBeforeStar)<2`));
@@ -162,6 +181,67 @@ try {
   await evaluate(`document.querySelector('.group').open=true;document.querySelector('.star-button').click()`);
   await wait(`document.querySelector('.session-card').classList.contains('is-starred') && !document.querySelector('.star-button').disabled`);
   check("an immediate star/host update cannot undo a newly expanded project group", await evaluate(`document.querySelector('.group').open && document.querySelector('.session-card').getBoundingClientRect().height>0`));
+  await evaluate(`window.toggleSidebarSearch()`);
+  check("native magnifier expands search and moves keyboard focus into its field", await evaluate(`!document.querySelector('#search-panel').hidden && document.activeElement.id==='search' && document.querySelector('#search-panel').textContent.includes('Search sessions')`));
+  check("search defaults to user prompts with three explicitly labeled scopes", await evaluate(`document.querySelector('#search-scope').value==='user' && document.querySelectorAll('#search-scope option').length===3`));
+  const searchFor = async (text, scope = "user") => {
+    await evaluate(`document.querySelector('#search-scope').value=${JSON.stringify(scope)};document.querySelector('#search').focus();document.querySelector('#search').value=${JSON.stringify(text)};document.querySelector('#search').dispatchEvent(new Event('input'));`);
+    await wait(`window.requests.at(-1)?.action==='search' && window.requests.at(-1).text===${JSON.stringify(text)} && window.requests.at(-1).searchScope===${JSON.stringify(scope)} && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
+  };
+  check("IME composition does not search intermediate input or consume its Enter key", await evaluate(`(async () => {
+    const input=document.querySelector('#search'), count=window.requests.length;
+    input.dispatchEvent(new CompositionEvent('compositionstart')); input.value='输入中';
+    input.dispatchEvent(new InputEvent('input',{isComposing:true}));
+    const enter=new KeyboardEvent('keydown',{key:'Enter',isComposing:true,cancelable:true}); input.dispatchEvent(enter);
+    await new Promise(resolve=>setTimeout(resolve,250));
+    return window.requests.length===count && !enter.defaultPrevented;
+  })()`));
+  await evaluate(`document.querySelector('#search').value='userneedle';document.querySelector('#search').dispatchEvent(new CompositionEvent('compositionend'))`);
+  await wait(`document.querySelector('.session-card')?.dataset.uid==='pi:row-0' && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
+  check("committed IME text triggers the prompt-only search", await evaluate(`window.requests.at(-1).text==='userneedle' && window.requests.at(-1).searchScope==='user'`));
+  await searchFor('assistantneedle');
+  check("default prompt-only query has an actionable empty state", await evaluate(`!document.querySelector('.session-card') && document.querySelector('#search-summary').textContent.includes('wider scope')`));
+  await evaluate(`document.querySelector('#search-scope').value='conversation';document.querySelector('#search-scope').dispatchEvent(new Event('change'))`);
+  await wait(`document.querySelectorAll('.session-card').length===1 && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
+  check("scope changes immediately rerun the same query and expand matching groups", await evaluate(`window.requests.at(-1).text==='assistantneedle' && window.requests.at(-1).searchScope==='conversation' && document.querySelector('.session-card').dataset.uid==='pi:row-1' && Array.from(document.querySelectorAll('.group')).every(g=>g.open)`));
+  await searchFor('toolneedle', 'conversation');
+  check("conversation scope excludes tool-only content", await evaluate(`!document.querySelector('.session-card')`));
+  await searchFor('toolneedle', 'all');
+  check("all-content scope returns tool matches and persists controls", await evaluate(`document.querySelector('.session-card').dataset.uid==='pi:row-2' && window.savedState.text==='toolneedle' && window.savedState.searchScope==='all'`));
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'sessionHub.sidebar.state',search:{text:'outdated',searchScope:'user'},groups:[],status:''}}))`);
+  check("stale host search responses cannot replace the current result", await evaluate(`document.querySelector('.session-card').dataset.uid==='pi:row-2'`));
+  await cdp("Page.reload");
+  await wait(`document.querySelector('.session-card')?.dataset.uid==='pi:row-2' && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
+  check("webview recreation restores the query and range, then searches again", await evaluate(`document.querySelector('#search').value==='toolneedle' && document.querySelector('#search-scope').value==='all' && window.requests.some(r=>r.action==='search'&&r.text==='toolneedle'&&r.searchScope==='all')`));
+  await searchFor('allrows', 'all');
+  await evaluate(`document.querySelector('.more').click()`);
+  await wait(`document.querySelectorAll('.session-card').length===200`);
+  await searchFor('userneedle', 'user');
+  check("new queries reset pagination and preserve search field focus", await evaluate(`document.querySelectorAll('.session-card').length===1 && document.querySelector('#search-summary').textContent.includes('1 session found') && document.activeElement.id==='search'`));
+  await evaluate(`document.querySelector('#search').focus()`);
+  await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await wait(`document.querySelectorAll('.session-card').length===100 && document.querySelector('#groups').getAttribute('aria-busy')==='false'`);
+  check("Escape clears the query without changing the scope or saved group collapse state", await evaluate(`document.querySelector('#search').value==='' && document.querySelector('#search-scope').value==='user' && document.activeElement.id==='search' && !document.querySelector('[data-scope=other]').open`));
+  for (const width of [220, 320, 480]) {
+    await cdp("Emulation.setDeviceMetricsOverride", { width, height: 700, deviceScaleFactor: 1, mobile: false });
+    check(`${width}px search controls fit the sidebar`, await evaluate(`document.documentElement.scrollWidth<=innerWidth && document.querySelector('#search-scope').getBoundingClientRect().right<=innerWidth`));
+  }
+  await searchFor('toolneedle','all');
+  await evaluate(`document.querySelector('#search-close').click()`);
+  await wait(`document.querySelector('#search-panel').hidden && document.querySelectorAll('.session-card').length===100`);
+  check("closing search clears hidden filters and restores the full list", await evaluate(`window.requests.at(-1).action==='closeSearch' && document.querySelector('#search').value===''`));
+  await evaluate(`window.toggleSidebarSearch()`);
+  await searchFor('userneedle');
+  await evaluate(`window.toggleSidebarSearch()`);
+  await wait(`document.querySelector('#search-panel').hidden && document.querySelectorAll('.session-card').length===100`);
+  check("clicking the magnifier again collapses and clears search", true);
+  await evaluate(`window.toggleSidebarSearch()`);
+  for (const theme of ['vscode-light','vscode-dark','vscode-high-contrast','vscode-high-contrast-light']) {
+    await evaluate(`document.body.className=${JSON.stringify(theme)}`);
+    check(`${theme} search panel uses visible inputs and no horizontal overflow`, await evaluate(`document.querySelector('#search').getBoundingClientRect().height>=30 && document.documentElement.scrollWidth<=innerWidth && getComputedStyle(document.querySelector('#search')).backgroundColor!=='rgba(0, 0, 0, 0)'`));
+  }
+  await evaluate(`document.querySelector('.star-button').click()`);
+  await wait(`document.querySelector('.session-card').classList.contains('is-starred') && !document.querySelector('.star-button').disabled`);
   if (process.env.SIDEBAR_SCREENSHOT || process.env.SIDEBAR_HTML) {
     await evaluate(`document.querySelector('.group').open=true;document.body.className='vscode-dark';document.body.style.removeProperty('--vscode-sessionHub-starredForeground');window.scrollTo(0,0)`);
     await wait(`document.querySelector('.session-card').classList.contains('is-starred') && !document.querySelector('.star-button').disabled`);

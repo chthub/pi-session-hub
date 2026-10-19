@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { readSessionText, SESSION_READ_LIMIT } from "./reader.ts";
 import path from "node:path";
 import type { ExternalSession, PreviewMessage } from "../types.ts";
-import type { ListOptions } from "./types.ts";
+import type { ListOptions, SessionReadOptions } from "./types.ts";
 import { clip, cleanText, cleanTranscriptText, redact } from "../security.ts";
 
 export interface StatInfo {
@@ -259,39 +259,47 @@ function parseToolInput(input: unknown): unknown {
   try { return JSON.parse(input); } catch { return input; }
 }
 
-function toolValue(value: unknown): string {
-  if (value === undefined) return "未记录";
+type ToolLabelLocale = NonNullable<SessionReadOptions["locale"]>;
+const TOOL_LABELS = {
+  "zh-CN": { tool: "工具：", callId: "调用 ID：", arguments: "调用参数：", missing: "未记录", empty: "（空输出）", unnamed: "未记录工具名" },
+  en: { tool: "Tool: ", callId: "Call ID: ", arguments: "Arguments:", missing: "Not recorded", empty: "(empty output)", unnamed: "Tool name not recorded" },
+};
+
+function toolValue(value: unknown, locale: ToolLabelLocale): string {
+  if (value === undefined) return TOOL_LABELS[locale].missing;
   if (value === null) return "null";
   if (typeof value === "string") return redact(value);
   return redact(JSON.stringify(value, (key, item) =>
     /^(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|authorization)$/i.test(key)
-      ? "[REDACTED]" : typeof item === "string" ? redact(item) : item, 2) ?? "未记录");
+      ? "[REDACTED]" : typeof item === "string" ? redact(item) : item, 2) ?? TOOL_LABELS[locale].missing);
 }
 
-export function pushToolCall(messages: PreviewMessage[], name: string, input: unknown, callId?: unknown, max = 4000): void {
+export function pushToolCall(messages: PreviewMessage[], name: string, input: unknown, callId?: unknown, max = 4000, locale: ToolLabelLocale = "zh-CN"): void {
   if (messages.length >= max) return;
   const args = parseToolInput(input);
-  const parts = [`工具：${name}`];
-  if (typeof callId === "string" && callId) parts.push(`调用 ID：${callId}`);
+  const labels = TOOL_LABELS[locale];
+  const parts = [`${labels.tool}${name}`];
+  if (typeof callId === "string" && callId) parts.push(`${labels.callId}${callId}`);
   // Show source command/argv fields verbatim, never manufacture shell quoting.
   if (args && typeof args === "object" && !Array.isArray(args)) {
     const record = args as Record<string, unknown>;
     for (const key of ["command", "cmd", "script", "shell_command"]) {
       if (typeof record[key] === "string" || Array.isArray(record[key])) {
-        parts.push(`\n命令（${key}）：\n${toolValue(record[key])}`);
+        const heading = locale === "en" ? `Command (${key}):` : `命令（${key}）：`;
+        parts.push(`\n${heading}\n${toolValue(record[key], locale)}`);
         break;
       }
     }
   }
-  parts.push(`\n调用参数：\n${toolValue(args)}`);
+  parts.push(`\n${labels.arguments}\n${toolValue(args, locale)}`);
   messages.push({ role: "toolCall", text: clip(redact(parts.join("\n")), 8000), toolName: clip(redact(name), 200),
     ...(typeof callId === "string" && callId ? { toolCallId: clip(redact(callId), 200) } : {}) });
 }
 
-export function pushToolResult(messages: PreviewMessage[], output: unknown, name?: unknown, callId?: unknown, max = 4000): void {
+export function pushToolResult(messages: PreviewMessage[], output: unknown, name?: unknown, callId?: unknown, max = 4000, locale: ToolLabelLocale = "zh-CN"): void {
   if (messages.length >= max) return;
-  const text = typeof output === "string" ? output : Array.isArray(output) ? contentToText(output) || toolValue(output) : toolValue(output);
-  messages.push({ role: "toolResult", text: clip(redact(text || "（空输出）"), 8000),
+  const text = typeof output === "string" ? output : Array.isArray(output) ? contentToText(output) || toolValue(output, locale) : toolValue(output, locale);
+  messages.push({ role: "toolResult", text: clip(redact(text || TOOL_LABELS[locale].empty), 8000),
     ...(typeof name === "string" && name ? { toolName: clip(redact(name), 200) } : {}),
     ...(typeof callId === "string" && callId ? { toolCallId: clip(redact(callId), 200) } : {}) });
 }
@@ -300,6 +308,7 @@ export function pushToolResult(messages: PreviewMessage[], output: unknown, name
 export function pushTranscriptBlocks(
   messages: PreviewMessage[], role: string, content: unknown,
   opts: { preserveFormatting?: boolean; textLimit?: number; max?: number } = {},
+  locale: ToolLabelLocale = "zh-CN",
 ): void {
   const max = opts.max ?? 4000;
   const prose = (text: string) => {
@@ -319,12 +328,12 @@ export function pushTranscriptBlocks(
       const name = b.name ?? b.tool ?? b.toolName;
       const input = "arguments" in b ? b.arguments : "input" in b ? b.input : "parameters" in b ? b.parameters :
         (["command", "cmd", "script", "shell_command"].some(key => key in b) ? b : undefined);
-      pushToolCall(messages, typeof name === "string" ? name : "未记录工具名", input, b.id ?? b.call_id ?? source.id, max);
-      if ("output" in b) pushToolResult(messages, b.output, name, b.id ?? b.call_id ?? source.id, max);
+      pushToolCall(messages, typeof name === "string" ? name : TOOL_LABELS[locale].unnamed, input, b.id ?? b.call_id ?? source.id, max, locale);
+      if ("output" in b) pushToolResult(messages, b.output, name, b.id ?? b.call_id ?? source.id, max, locale);
     } else if (type === "tool_result" || type === "toolResult") {
       const output = "content" in b ? b.content : "output" in b ? b.output : "result" in b ? b.result : b.text;
       pushToolResult(messages, output, b.name ?? b.toolName,
-        b.tool_use_id ?? b.tool_call_id ?? b.call_id ?? b.id, max);
+        b.tool_use_id ?? b.tool_call_id ?? b.call_id ?? b.id, max, locale);
     } else if (type !== "thinking" && type !== "reasoning" && type !== "reasoning_trace" && type !== "open_a_i_reasoning") {
       if (typeof b.text === "string") prose(b.text);
       else if (typeof b.content === "string") prose(b.content);
