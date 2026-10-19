@@ -224,7 +224,7 @@ try {
   check("explicit light theme overrides the VS Code host palette", await evaluate('document.documentElement.dataset.theme === "light" && getComputedStyle(document.querySelector("#viewer")).backgroundColor === "rgb(255, 255, 255)"'));
   await evaluate('delete document.documentElement.dataset.theme; updateThemeButton()');
   check("VS Code asks adapters for English generated tool labels", lastReadOptions.locale === "en");
-  check("Export PDF sits in the page header beside existing buttons and enables after reading", await evaluate('document.querySelector("#export-pdf").parentElement.className === "header-actions" && document.querySelector("#export-pdf").textContent === "Export PDF" && !document.querySelector("#export-pdf").disabled'));
+  check("Export PDF sits beside View raw text in the transcript toolbar, not the page header", await evaluate('document.querySelector("#export-pdf").closest(".transcript-toolbar") && document.querySelector("#export-pdf").previousElementSibling.textContent === "View raw text" && !document.querySelector(".header-actions #export-pdf") && document.querySelectorAll("#export-pdf").length === 1 && !document.querySelector("#export-pdf").disabled'));
   blockPdf = true;
   await evaluate('document.querySelector(".message-tool").open = true; document.querySelector("#export-pdf").click()');
   await wait('document.querySelector("#export-pdf").textContent === "Exporting…" && document.querySelector("#export-pdf").disabled');
@@ -232,6 +232,12 @@ try {
   const progressDeadline = Date.now() + 5000;
   while (!finishPdfProgress && Date.now() < progressDeadline) await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(finishPdfProgress);
+  const requestsBeforeToggle = hostRequests.filter(request => request.operation === "exportPdf").length;
+  await evaluate('window.pendingExportControl = document.querySelector("#export-pdf"); document.querySelector(".toolbar-actions button").click()');
+  check("raw/rendered rebuilds retain the same disabled Export PDF control while exporting",
+    await evaluate('document.querySelector("#export-pdf") === window.pendingExportControl && document.querySelector("#export-pdf").disabled && document.querySelector("#export-pdf").textContent === "Exporting…" && document.querySelector("#export-pdf").previousElementSibling.textContent === "View rendered text" && document.querySelectorAll("#export-pdf").length === 1'));
+  await evaluate('document.querySelector("#export-pdf").click(); document.querySelector(".toolbar-actions button").click()');
+  assert.equal(hostRequests.filter(request => request.operation === "exportPdf").length, requestsBeforeToggle);
   finishPdfProgress(); blockPdf = false;
   await wait('document.querySelector("#notice").textContent.startsWith("PDF exported: ") && !document.querySelector("#export-pdf").disabled');
   const exportedPdf = fs.readdirSync(pdfWorkspace).filter(file => file.endsWith(".pdf"));
@@ -269,7 +275,7 @@ try {
   check("resume, clipboard and refresh failures are visible and English", (await generatedChinese()).length === 0);
   missingSession = true;
   await evaluate('openSession("pi:synthetic")');
-  check("PDF export is disabled while the session cannot be read", await evaluate('document.querySelector("#export-pdf").disabled'));
+  check("PDF export is not offered without a readable transcript toolbar", await evaluate('!document.querySelector("#export-pdf")'));
   check("read failure and unavailable outline are English", await evaluate('document.querySelector("#viewer").textContent.startsWith("Read failed: The source session") && document.querySelector("#outline-status").textContent === "Read failed; outline unavailable"'));
   missingSession = false;
   await evaluate('openSession("pi:synthetic")');

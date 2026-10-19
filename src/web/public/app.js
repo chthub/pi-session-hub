@@ -18,6 +18,10 @@ let resizeObserver;
 let measureFrame;
 let scrollFrame;
 let exportingPdf = false;
+// Reuse one control so raw/rendered toolbar rebuilds preserve its pending state.
+const exportPdfButton = button("Export PDF", exportPdf);
+exportPdfButton.id = "export-pdf";
+exportPdfButton.disabled = true;
 // Steps match Chrome's Ctrl+wheel zoom levels.
 const zoomLevels = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
 let zoom = readZoom();
@@ -307,7 +311,7 @@ function renderDetail(restore = null) {
     renderDetail(reading);
   });
   toggle.setAttribute("aria-pressed", String(raw));
-  actions.append(toggle, button(t("回到开头", "Back to top"), () => viewer.scrollTo({ top: 0 })), button(t("跳到末尾", "Jump to bottom"), () => viewer.scrollTo({ top: viewer.scrollHeight })));
+  actions.append(toggle, exportPdfButton, button(t("回到开头", "Back to top"), () => viewer.scrollTo({ top: 0 })), button(t("跳到末尾", "Jump to bottom"), () => viewer.scrollTo({ top: viewer.scrollHeight })));
   const zoomGroup = element("div", undefined, "zoom-controls");
   zoomGroup.setAttribute("role", "group");
   zoomGroup.setAttribute("aria-label", t("正文缩放", "Transcript zoom"));
@@ -383,7 +387,7 @@ async function openSession(uid) {
   const version = ++detailVersion;
   selected = uid;
   detail = null;
-  $("export-pdf").disabled = true;
+  exportPdfButton.disabled = true;
   setSidebar(false);
   $("outline-filter").value = "";
   clearOutline(t("正在读取用户消息…", "Loading user messages…"));
@@ -393,7 +397,7 @@ async function openSession(uid) {
     const result = await transport.getSession(uid);
     if (version !== detailVersion) return;
     detail = result;
-    $("export-pdf").disabled = exportingPdf;
+    exportPdfButton.disabled = exportingPdf;
     renderDetail();
     $("viewer").scrollTop = 0;
     scheduleMeasure();
@@ -450,11 +454,11 @@ $("search").addEventListener("input", () => {
 });
 $("harness").addEventListener("change", () => { clearTimeout(timer); loadList(); });
 $("more").addEventListener("click", () => loadList(true));
-$("export-pdf").addEventListener("click", async () => {
+async function exportPdf() {
   if (!detail || exportingPdf) return;
   exportingPdf = true;
-  $("export-pdf").disabled = true;
-  $("export-pdf").textContent = "Exporting…";
+  exportPdfButton.disabled = true;
+  exportPdfButton.textContent = "Exporting…";
   notice("Exporting conversation as PDF…");
   try {
     const result = await transport.exportPdf(selected);
@@ -462,10 +466,10 @@ $("export-pdf").addEventListener("click", async () => {
   } catch (error) { notice(`PDF export failed: ${error.message}`, true); }
   finally {
     exportingPdf = false;
-    $("export-pdf").disabled = !detail;
-    $("export-pdf").textContent = "Export PDF";
+    exportPdfButton.disabled = !detail;
+    exportPdfButton.textContent = "Export PDF";
   }
-});
+}
 $("refresh").addEventListener("click", async () => {
   $("refresh").disabled = true;
   notice(t("正在扫描本机会话…", "Scanning local sessions…"));

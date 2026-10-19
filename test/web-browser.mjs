@@ -103,7 +103,7 @@ try {
   await cdp("Page.navigate", { url: forward.url });
   await wait('document.querySelectorAll(".session").length === 6');
   check("browser loads six sessions", true);
-  check("Export PDF is English and disabled until a conversation is loaded", await evaluate('document.querySelector("#export-pdf").textContent === "Export PDF" && document.querySelector("#export-pdf").disabled'));
+  check("Export PDF is absent until a conversation toolbar is available", await evaluate('!document.querySelector("#export-pdf")'));
   check("connection status is inside compact header", await evaluate('document.querySelector("#notice").closest(".app-header") !== null && document.querySelector(".app-header").getBoundingClientRect().height <= 52'));
   check("workspace starts immediately below header", await evaluate('Math.abs(document.querySelector(".workspace").getBoundingClientRect().top - document.querySelector(".app-header").getBoundingClientRect().bottom) < 1'));
   check("long status remains readable via full tooltip without enlarging header", await evaluate('(() => { const original = document.querySelector("#notice").textContent; notice("部分来源读取失败：" + "很长的诊断信息".repeat(100), true); const status = document.querySelector("#notice"); const ok = status.title === status.textContent && document.querySelector(".app-header").getBoundingClientRect().height <= 52 && document.documentElement.scrollWidth <= innerWidth; notice(original); return ok; })()'));
@@ -111,6 +111,7 @@ try {
   await evaluate('Array.from(document.querySelectorAll(".session")).find(b => b.querySelector(".harness-badge").textContent === "Pi").click()');
   await wait('document.querySelectorAll(".katex-display").length > 0');
   await evaluate("document.fonts.ready.then(() => true)");
+  check("Export PDF is English and directly follows the raw-text toggle", await evaluate('document.querySelector("#export-pdf").textContent === "Export PDF" && document.querySelector("#export-pdf").previousElementSibling === document.querySelector(".toolbar-actions button") && document.querySelector("#export-pdf").closest(".transcript-toolbar") && !document.querySelector(".header-actions #export-pdf")'));
   const sourceBeforePdf = fs.readFileSync(piFile);
   await evaluate('document.querySelector("#export-pdf").click()');
   await wait('document.querySelector("#notice").textContent.startsWith("PDF exported: ") && !document.querySelector("#export-pdf").disabled');
