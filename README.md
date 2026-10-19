@@ -1,5 +1,6 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/Gateton/pi-session-hub/main/assets/session-hub.png" alt="pi-session-hub: sessions from JCode, OpenCode, Pi, Claude Code, Codex and Crush in one full-screen list, with the selected session's metadata and transcript on the right" width="880">
+  <img src="assets/vscode-session-hub-preview.png" alt="Simulated VS Code window with the Session Hub sidebar, six coding-agent icons, starred sessions, a conversation reader and user-message navigation" width="1100">
+  <p><em>VS Code preview · simulated window with synthetic sessions and example content.</em></p>
 
 # pi-session-hub
 
@@ -18,11 +19,21 @@
 - **Continue work that started elsewhere**: press `Enter` and the selected session's conversation is loaded into the current chat as a tiered, budgeted context package, so the next thing you type already has it.
 - **Read without spending tokens**: `v` opens the recovered transcript in a read-only terminal viewer. Browser and VS Code viewers add Markdown and `$...$` / `$$...$$` math rendering, user-message navigation and grouped tool activity.
 - **Reopen the original tool when you want to**: `n` runs the session's own resume command, with the exact command and its verification basis shown before anything is launched.
-- **Stay in VS Code**: use the two-line Session Hub sidebar, open history in editor tabs and choose **▶ Resume in terminal** to resume in an integrated terminal. No HTTP server, browser or port forwarding is needed.
+- **Stay in VS Code**: browse the Session Hub sidebar in comfortable or compact density, open history in editor tabs and choose **▶ Resume in terminal** to resume in an integrated terminal. No HTTP server, browser or port forwarding is needed.
 - **Restore the Pi configuration environment**: user-configured profile directories are matched against saved system Context paths; missing or conflicting evidence prompts for a choice instead of silently inheriting another account.
 - **Follow your questions**: the shared reader's user-message outline supports search, click-to-jump, previous/next navigation and scroll tracking.
 - **Inspect agent activity**: consecutive tool calls/results share one compact foldout with tool names, arguments, commands and source call IDs.
 - **Stay local and read-only while browsing**: Hub stores its index under `~/.pi/agent/pi-session-hub/`; VS Code stars use extension-owned storage. It never uploads history. The standalone Web host uses authenticated loopback HTTP; VS Code uses UID-validated `postMessage`. Explicit Resume starts the native agent, which then maintains its own session normally.
+
+## Pi terminal preview
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Gateton/pi-session-hub/main/assets/session-hub.png" alt="Pi terminal Session Hub with sessions from six coding agents, selected-session metadata and a transcript preview" width="880">
+</p>
+
+*Pi terminal UI captured with synthetic sessions—not personal conversation history.*
+
+Press **Alt+R** inside Pi to browse, search and continue sessions without leaving the terminal. Prefer editor tabs and native terminals? See [VS Code Remote SSH setup](#vs-code-remote-ssh).
 
 ## Package facts
 
@@ -151,7 +162,7 @@ npm run package --prefix vscode-extension
 
 1. Connect to the Linux server with VS Code Remote SSH and open your project.
 2. Use **Install from VSIX…** to install `vscode-extension/pi-session-hub-vscode-0.1.0.vsix` on the **remote SSH host**.
-3. Open **Session Hub** in the Activity Bar. The sidebar groups current-project, unscoped and other-project history; multi-root workspaces are supported. Each session uses two rows: title above, harness/recency and an always-visible star button below. Starred cards have a gold title, border and subtle background, and are pinned above ordinary sessions within their project group. Both sections retain newest-first order; unstar restores normal chronological placement. Pinning happens before sidebar pagination.
+3. Open **Session Hub** in the Activity Bar. The sidebar groups current-project, unscoped and other-project history; multi-root workspaces are supported. `sessionHub.sidebar.density` selects **comfortable** (default: title above, time below) or **compact** (one 24px row with a short time label). Official harness icons sit beside the title. Unstarred rows reveal their star button on hover or keyboard focus; starred rows retain a colored, filled star and are pinned above ordinary sessions within their project group. Both sections retain newest-first order; unstar restores normal chronological placement. Pinning happens before sidebar pagination.
 4. Click a session to read it in an editor tab: Markdown, local KaTeX, user-message outline, raw/rendered toggle and grouped tool activity use the shared Web Viewer UI.
 5. Choose **Resume in terminal**, confirm, and continue in a native VS Code terminal running the original Pi/Claude/etc TUI. The source-backed cwd takes precedence; no session-store parent or workspace cwd is guessed.
    To start a blank conversation instead, click **+** beside the refresh button and pick a harness. Only CLIs found on `PATH` are offered, and Pi appears once per configured Pi environment (`PI_CODING_AGENT_DIR` is set explicitly). The terminal starts in the workspace folder; multi-root workspaces ask which folder.
@@ -469,6 +480,9 @@ protocol, including a different-port forwarding fixture. Screenshots are optiona
 set `WEB_SCREENSHOT`, `WEB_SCREENSHOT_AGENT` or `WEB_SCREENSHOT_MOBILE` to an output
 path outside the repository. Never commit real-session captures or debug logs.
 
+Regenerate the synthetic VS Code README preview with `node bin/render-vscode-preview.mjs`
+(Chrome or `CHROME_BIN` required). It uses example content, not local session stores.
+
 The default acceptance suite now uses isolated synthetic homes, preserving its
 original assertions with deterministic search, long-session and subagent fixtures.
 `npm run test:real` retains the opt-in real-store checks; those still depend on
@@ -526,7 +540,7 @@ npm pack && tar xzf pi-session-hub-*.tgz && pi -e ./package
 - **Claude sub-agent transcripts** are indexed (they contain real work) but marked as not resumable and carry their parent session id in the notes.
 - **Large files are streamed, not cut off at 64 MiB**: JSONL sources are scanned through their end; JCode JSON is parsed one message at a time. A single source record/value still has a 64 MiB guard. Oversized or malformed JSONL records are reported and skipped while later records remain readable; invalid or oversized monolithic JSON values cause that source read to fail. Rendered transcripts retain up to 8,000 blocks / 8 Mi characters, preserving the opening three blocks and the latest tail when middle blocks must be omitted. Fidelity notes report omissions; individual prose/tool blocks remain clipped to 4k–8k characters. The viewer is a bounded recovery, not a lossless source copy.
 - **Search covers a bounded excerpt**, not the entire history of a very long session. Phrases from beyond the sampled window will not match.
-- The screenshot above is the real UI captured from a synthetic home directory so that every harness appears at once. It is illustrative data, not anyone's actual sessions.
+- Both interface previews use synthetic data. The first image is a simulated VS Code window; the second is the Pi terminal UI captured from a synthetic home directory. Neither image contains personal conversation history.
 
 ## Contributing
 
@@ -537,3 +551,5 @@ Adding a harness: implement `SessionAdapter` in `src/adapters/<name>.ts`, regist
 ## License
 
 [MIT](LICENSE)
+
+The simulated VS Code preview uses Microsoft's [Codicons settings-gear icon](https://github.com/microsoft/vscode-codicons/blob/8853e0b1b0e2058b099fde515d5f1f478db2f8e1/src/icons/settings-gear.svg) under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), resized and rendered in gray for the mock window. Harness artwork retains its [original owners' terms](vscode-extension/media/harness/SOURCES.md).
