@@ -15,8 +15,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { BorderedLoader } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
+import { BorderedLoader, keyText } from "@earendil-works/pi-coding-agent";
+import { Box, MouseRegion, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { SessionHubService } from "../src/core/service.ts";
@@ -659,8 +659,10 @@ export default function sessionHub(pi: ExtensionAPI) {
   /**
    * The imported context is a long document. Rendering it collapsed keeps the
    * chat readable while still making it obvious that context was loaded and
-   * where it came from. Expanding the message shows the full handoff.
+   * where it came from. Expand with the local mouse control or Pi's global
+   * expansion shortcut. Preserve local state across resize/theme invalidations.
    */
+  const importExpansion = new WeakMap<object, { expanded: boolean; globalExpanded: boolean }>();
   pi.registerMessageRenderer(
     "session-hub-import",
     (message, { expanded, outputPad }, theme) => {
@@ -694,42 +696,57 @@ export default function sessionHub(pi: ExtensionAPI) {
       ]
         .filter(Boolean)
         .join("  \u00b7  ");
-      box.addChild(
-        new Text(
-          `${theme.fg("accent", theme.bold("imported transcript"))}  ${label}` +
-            theme.fg("dim", `  ${sizing}`),
-          0,
-          0,
-        ),
-      );
-      box.addChild(new Text(theme.fg("dim", `source: ${d.sourcePath ?? "unknown"}`), 0, 0));
-
-      const body = String(message.content ?? "");
-      if (expanded) {
-        box.addChild(new Text("", 0, 0));
-        for (const line of body.split("\n").slice(0, 300)) {
-          box.addChild(new Text(theme.fg("muted", line), 0, 0));
-        }
-      } else {
-        const objective = body
-          .split("\n")
-          .find((l) => l.startsWith("- Original objective:"));
-        if (objective) {
-          box.addChild(new Text(theme.fg("text", objective.slice(0, 220)), 0, 0));
-        }
-        if (d.unavailableFields?.length) {
-          box.addChild(
-            new Text(
-              theme.fg("dim", `source notes: ${d.unavailableFields.slice(0, 2).join("; ")}`),
-              0,
-              0,
-            ),
-          );
-        }
-        box.addChild(
-          new Text(theme.fg("dim", "expand this message to read the imported transcript"), 0, 0),
-        );
+      let state = importExpansion.get(message);
+      if (!state || state.globalExpanded !== expanded) {
+        state = { expanded, globalExpanded: expanded };
+        importExpansion.set(message, state);
       }
+      const expansion = state;
+      const body = String(message.content ?? "");
+      const render = () => {
+        box.clear();
+        box.addChild(
+          new Text(
+            `${theme.fg("accent", theme.bold("imported transcript"))}  ${label}` +
+              theme.fg("dim", `  ${sizing}`),
+            0,
+            0,
+          ),
+        );
+        box.addChild(new Text(theme.fg("dim", `source: ${d.sourcePath ?? "unknown"}`), 0, 0));
+        if (expansion.expanded) {
+          box.addChild(new Text("", 0, 0));
+          // The import is already budgeted; do not silently hide its later lines.
+          box.addChild(new Text(theme.fg("muted", body), 0, 0));
+        } else {
+          const objective = body
+            .split("\n")
+            .find((l) => l.startsWith("- Original objective:"));
+          if (objective) {
+            box.addChild(new Text(theme.fg("text", objective.slice(0, 220)), 0, 0));
+          }
+          if (d.unavailableFields?.length) {
+            box.addChild(
+              new Text(
+                theme.fg("dim", `source notes: ${d.unavailableFields.slice(0, 2).join("; ")}`),
+                0,
+                0,
+              ),
+            );
+          }
+        }
+        const shortcut = keyText("app.tools.expand");
+        const action = expansion.expanded ? "collapse" : "expand";
+        const hint = `click to ${action} imported transcript (fullscreen)` +
+          (shortcut ? ` · ${shortcut} toggles all expandable output` : "");
+        box.addChild(new MouseRegion(new Text(theme.fg("dim", hint), 0, 0), event => {
+          if (event.type !== "click" || event.button !== "left") return undefined;
+          expansion.expanded = !expansion.expanded;
+          render();
+          return { handled: true, render: true };
+        }));
+      };
+      render();
       return box;
     },
   );

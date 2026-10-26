@@ -140,10 +140,10 @@ pi -e /path/to/pi-session-hub
     imported transcript  ◆ JCode  102/804 messages  ·  ~8,172 tokens
     source: ~/.jcode/sessions/session_example.json
     - Original objective: implement the billing endpoint and its regression tests
-    expand this message to read the imported transcript
+    click to expand imported transcript (fullscreen) · ctrl+o toggles all expandable output
    ```
 
-   The snippet above is an illustrative example, not a real transcript. Just type what you want to do next. The cost is reported every time, and the message is collapsed until you expand it.
+   The snippet above is an illustrative example, not a real transcript. Just type what you want to do next. The cost is reported every time. In fullscreen mode, click the expand/collapse hint to toggle this import; in either terminal mode, use Pi's expansion shortcut (default `Ctrl+O`) to toggle all expandable output. The hint follows your configured shortcut. Expansion displays the whole budgeted import, including lines beyond the first 300; the source transcript's import limits still apply.
 
 5. To ask the agent directly instead, just ask. It has the tools:
 

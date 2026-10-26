@@ -9,19 +9,36 @@ const home = path.join(temp, "home");
 const previous = process.env.PI_SESSION_HUB_HOME;
 const stubs = path.join(temp, "host-stubs.mjs");
 fs.writeFileSync(stubs, `export class BorderedLoader { setMessage() {} }
-export class Box { addChild() {} }
-export class Text {}
+export class Box {
+  children = [];
+  addChild(child) { this.children.push(child); }
+  clear() { this.children = []; }
+  render(width) { return this.children.flatMap(child => child.render(width)); }
+}
+export class Text {
+  constructor(text) { this.text = text; }
+  render() { return this.text.split("\\n"); }
+}
+export class MouseRegion {
+  constructor(child, onMouse) { this.child = child; this.onMouse = onMouse; }
+  render(width) { return this.child.render(width); }
+  handleMouse(event) { return this.onMouse(event); }
+}
+let expandKey = "ctrl+o";
+export function keyText() { return expandKey; }
+export function setExpandKey(key) { expandKey = key; }
 const field = value => value;
 export const Type = { Object: field, Optional: field, String: field, Number: field };
 `);
 const aliases = Object.fromEntries(["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"].map(name => [name, stubs]));
-const commands = new Map(), tools = new Map(), events = new Map();
+const commands = new Map(), tools = new Map(), events = new Map(), renderers = new Map();
 const notices = [], editors = [], selections = [], confirmations = [];
 let handoff, active = [];
 const pi = {
   registerCommand(name, command) { commands.set(name, command); },
   registerTool(tool) { tools.set(tool.name, tool); },
-  registerShortcut() {}, registerMessageRenderer() {},
+  registerShortcut() {},
+  registerMessageRenderer(name, renderer) { renderers.set(name, renderer); },
   on(name, handler) { events.set(name, handler); },
   getAllTools() { return [...tools.values()]; },
   getActiveTools() { return active; }, setActiveTools(value) { active = value; },
@@ -43,7 +60,8 @@ const ctx = {
 try {
   await buildToolHome(home);
   process.env.PI_SESSION_HUB_HOME = home;
-  const { default: activate } = await createJiti(import.meta.url, { alias: aliases }).import("../extensions/session-hub.ts");
+  const jiti = createJiti(import.meta.url, { alias: aliases });
+  const { default: activate } = await jiti.import("../extensions/session-hub.ts");
   activate(pi);
   const dbPath = path.join(home, ".pi", "agent", "pi-session-hub", "index.sqlite");
   assert.equal(fs.existsSync(dbPath), false);
@@ -54,6 +72,44 @@ try {
   assert.equal(commands.size, 6); // /hub is an alias for /session-hub.
   assert.equal(tools.size, 3);
   console.log("PASS Pi host loads and keeps its commands/tools after service extraction");
+
+  const renderImport = renderers.get("session-hub-import");
+  const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text };
+  const message = {
+    content: ["- Original objective: synthetic objective", ...Array.from({ length: 350 }, (_, i) => `line ${i}`), "END_IMPORTED_CONTEXT"].join("\n"),
+    details: { harness: "claude-code", sourcePath: "/synthetic/session.jsonl" },
+  };
+  const options = { expanded: false, outputPad: 1 };
+  let importedBox = renderImport(message, options, theme);
+  const rendered = () => importedBox.render(100).join("\n");
+  const click = event => importedBox.children.find(child => child.handleMouse)?.handleMouse(event);
+  assert.ok(rendered().includes("click to expand") && rendered().includes("ctrl+o"));
+  assert.ok(!rendered().includes("END_IMPORTED_CONTEXT"));
+  for (const event of [{ type: "click", button: "right" }, { type: "wheel", button: "none" }, { type: "drag", button: "left" }]) {
+    assert.equal(click(event), undefined);
+    assert.ok(!rendered().includes("END_IMPORTED_CONTEXT"));
+  }
+  assert.deepEqual(click({ type: "click", button: "left" }), { handled: true, render: true });
+  assert.ok(rendered().includes("END_IMPORTED_CONTEXT") && rendered().includes("click to collapse"));
+  importedBox = renderImport(message, options, theme); // Resize/theme rebuild, unchanged global expansion.
+  assert.ok(rendered().includes("END_IMPORTED_CONTEXT"));
+  assert.ok(!renderImport({ ...message }, options, theme).render(100).join("\n").includes("END_IMPORTED_CONTEXT"));
+  click({ type: "click", button: "left" });
+  assert.ok(!rendered().includes("END_IMPORTED_CONTEXT"));
+  importedBox = renderImport(message, { ...options, expanded: true }, theme);
+  assert.ok(rendered().includes("END_IMPORTED_CONTEXT"));
+  importedBox = renderImport(message, options, theme);
+  assert.ok(!rendered().includes("END_IMPORTED_CONTEXT"));
+  const { setExpandKey } = await jiti.import(stubs);
+  setExpandKey("alt+o");
+  importedBox = renderImport(message, options, theme);
+  assert.ok(rendered().includes("alt+o") && !rendered().includes("ctrl+o"));
+  setExpandKey("");
+  importedBox = renderImport(message, options, theme);
+  assert.ok(rendered().includes("click to expand") && !rendered().includes("toggles all"));
+  setExpandKey("ctrl+o");
+  console.log("PASS imported transcript click/keyboard expansion, local-state isolation, rebuild persistence, custom/disabled keys and content beyond 300 lines");
+
   await tools.get("session_hub_enable").execute();
   assert.equal(fs.existsSync(dbPath), false, "enabling history tools must not access history");
   await commands.get("session-search").handler("billing", ctx);
