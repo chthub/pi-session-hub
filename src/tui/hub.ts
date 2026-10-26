@@ -657,7 +657,7 @@ export class HubComponent implements Component {
 
       const title = s.title ?? s.preview ?? s.nativeId;
       const titleLine =
-        `   ${gutter}` +
+        "    " +
         t.fg(isSel ? "accent" : "text", clip(title, Math.max(10, width - 6))) +
         (model && width > 60 ? t.fg("dim", `  ${model}`) : "");
       const titlePadded = pad(titleLine, width);
