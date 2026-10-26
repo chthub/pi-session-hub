@@ -105,42 +105,54 @@ export async function openIndex(dbPath: string): Promise<IndexHandle | null> {
   }
   const db = await openIndexDb(dbPath);
   if (!db) return null;
-  // WAL plus relaxed fsync keeps bulk indexing fast without risking corruption
-  // for a rebuildable cache. If the index is lost, it is simply rescanned.
-  exec(db, "PRAGMA journal_mode = WAL");
-  exec(db, "PRAGMA synchronous = NORMAL");
-  for (const sql of SCHEMA) exec(db, sql);
-  // v1 fingerprints did not record the session ID. Backfill canonical paths
-  // without rereading sources; unmapped duplicate paths are learned on scan.
-  if (!db.all<{ name: string }>("PRAGMA table_info(sources)").some(col => col.name === "uid")) {
-    exec(db, "ALTER TABLE sources ADD COLUMN uid TEXT");
-    exec(db, `UPDATE sources SET uid = (
-      SELECT s.uid FROM sessions s
-      WHERE s.harness = sources.harness AND s.path = sources.path
-        AND s.mtime_ms = sources.mtime_ms AND s.size = sources.size
-    )`);
+  try {
+    // WAL plus relaxed fsync keeps bulk indexing fast for a rebuildable cache.
+    exec(db, "PRAGMA journal_mode = WAL");
+    exec(db, "PRAGMA synchronous = NORMAL");
+    // Serialize schema checks and migrations across processes. In particular,
+    // two openers must not both observe and ALTER the same missing column.
+    exec(db, "BEGIN IMMEDIATE");
+    try {
+      for (const sql of SCHEMA) exec(db, sql);
+      // v1 fingerprints did not record the session ID. Backfill canonical paths
+      // without rereading sources; unmapped duplicate paths are learned on scan.
+      if (!db.all<{ name: string }>("PRAGMA table_info(sources)").some(col => col.name === "uid")) {
+        exec(db, "ALTER TABLE sources ADD COLUMN uid TEXT");
+        exec(db, `UPDATE sources SET uid = (
+          SELECT s.uid FROM sessions s
+          WHERE s.harness = sources.harness AND s.path = sources.path
+            AND s.mtime_ms = sources.mtime_ms AND s.size = sources.size
+        )`);
+      }
+      // Per-source revisions survive capped/failed upgrades and interrupted scans.
+      if (!db.all<{ name: string }>("PRAGMA table_info(sources)").some(col => col.name === "parser_version")) {
+        exec(db, "ALTER TABLE sources ADD COLUMN parser_version TEXT");
+      }
+      if (db.get<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")?.value !== SCHEMA_VERSION) {
+        exec(db, "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", [SCHEMA_VERSION]);
+      }
+      exec(db, "COMMIT");
+    } catch (error) {
+      try { exec(db, "ROLLBACK"); } catch { /* preserve the migration error */ }
+      throw error;
+    }
+  } catch (error) {
+    db.close();
+    throw error;
   }
-  // Old head-only metadata must be re-read, without deleting indexed history.
-  // Per-source revisions also survive capped/failed upgrades and interrupted scans.
-  if (!db.all<{ name: string }>("PRAGMA table_info(sources)").some(col => col.name === "parser_version")) {
-    exec(db, "ALTER TABLE sources ADD COLUMN parser_version TEXT");
-  }
-  exec(db, `INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)`, [
-    SCHEMA_VERSION,
-  ]);
-  // Drop any FTS rows whose session no longer exists. REPLACE on the sessions
-  // table allocates a fresh rowid, so orphans accumulate without this sweep.
-  exec(
-    db,
-    "DELETE FROM search WHERE uid NOT IN (SELECT uid FROM sessions)",
-  );
-  exec(db, "DELETE FROM search_scopes WHERE uid NOT IN (SELECT uid FROM sessions)");
   return {
     db,
     close() {
       db.close();
     },
   };
+}
+
+/** Repair legacy/interrupted-write orphans during index maintenance, never on
+ * open. Normal upserts and removals already delete their own FTS rows by UID. */
+export function pruneOrphanedSearch(handle: IndexHandle): void {
+  exec(handle.db, "DELETE FROM search WHERE uid NOT IN (SELECT uid FROM sessions)");
+  exec(handle.db, "DELETE FROM search_scopes WHERE uid NOT IN (SELECT uid FROM sessions)");
 }
 
 /** Run a batch of writes inside one transaction. */
@@ -285,16 +297,16 @@ export function upsertSessions(handle: IndexHandle, sessions: ExternalSession[])
       [s.uid],
     )?.rowid;
     if (typeof rowid === "number") {
-      // Delete by uid, not just rowid: REPLACE on sessions allocates a new
-      // rowid, so a rowid-only delete would leave the previous FTS row behind.
-      exec(handle.db, "DELETE FROM search_scopes WHERE uid = ?", [s.uid]);
+      // Remove this UID's previous row and any orphan occupying the new rowid.
+      // SQLite can reuse a deleted session's rowid before maintenance runs.
+      exec(handle.db, "DELETE FROM search_scopes WHERE rowid = ? OR uid = ?", [rowid, s.uid]);
       exec(handle.db, "INSERT INTO search_scopes (rowid, uid, user_text, conversation_text, all_text) VALUES (?,?,?,?,?)", [
         rowid, s.uid, s.searchScopes?.user ?? "", s.searchScopes?.conversation ?? "",
         // All includes identifying metadata, but not legacy searchText/preview:
         // those can contain text whose role is no longer recoverable.
         [s.searchScopes?.all, s.title, s.repo, s.cwd, s.model, s.harness, s.nativeId].filter(Boolean).join("\n"),
       ]);
-      exec(handle.db, "DELETE FROM search WHERE uid = ?", [s.uid]);
+      exec(handle.db, "DELETE FROM search WHERE rowid = ? OR uid = ?", [rowid, s.uid]);
       exec(handle.db, "INSERT INTO search (rowid, uid, title, body) VALUES (?,?,?,?)", [
         rowid,
         s.uid,
@@ -362,11 +374,12 @@ export function querySessions(
     const column = opts.searchScope && Object.hasOwn(columns, opts.searchScope) ? columns[opts.searchScope] : null;
     if (opts.searchScope !== undefined && !column) throw new Error("Invalid search scope");
     if (column) {
-      where.push("s.rowid in (select rowid from search_scopes where search_scopes match ?)");
+      // Match both identifiers: an unrepaired orphan may share a reused rowid.
+      where.push("(s.rowid, s.uid) in (select rowid, uid from search_scopes where search_scopes match ?)");
       // Restrict the whole expression, including negations, to this column.
       params.push(`${column} : (${fts})`);
     } else {
-      where.push("s.rowid in (select rowid from search where search match ?)");
+      where.push("(s.rowid, s.uid) in (select rowid, uid from search where search match ?)");
       params.push(fts);
     }
   }

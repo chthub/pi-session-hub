@@ -45,11 +45,19 @@ try {
   process.env.PI_SESSION_HUB_HOME = home;
   const { default: activate } = await createJiti(import.meta.url, { alias: aliases }).import("../extensions/session-hub.ts");
   activate(pi);
+  const dbPath = path.join(home, ".pi", "agent", "pi-session-hub", "index.sqlite");
+  assert.equal(fs.existsSync(dbPath), false);
+  const started = performance.now();
   await events.get("session_start")();
+  assert.equal(fs.existsSync(dbPath), false, "session_start must not open/create the index");
+  console.log(`PASS lazy session_start: ${(performance.now() - started).toFixed(3)} ms, no index created`);
   assert.equal(commands.size, 6); // /hub is an alias for /session-hub.
   assert.equal(tools.size, 3);
   console.log("PASS Pi host loads and keeps its commands/tools after service extraction");
+  await tools.get("session_hub_enable").execute();
+  assert.equal(fs.existsSync(dbPath), false, "enabling history tools must not access history");
   await commands.get("session-search").handler("billing", ctx);
+  assert.equal(fs.existsSync(dbPath), true, "first history use initializes the index");
   assert.ok(notices.some(note => note.text.includes("pi:11111111")));
   console.log("PASS Pi search indexes/queries through shared service");
   await commands.get("session-open").handler("pi:11111111", ctx);
@@ -70,7 +78,13 @@ try {
   console.log("PASS history tools retain explicit enable-on-request behavior");
   await events.get("session_shutdown")();
   await events.get("session_shutdown")();
+  const beforeRestart = fs.readFileSync(dbPath);
+  const mtime = fs.statSync(dbPath).mtimeMs;
   await events.get("session_start")();
+  assert.deepEqual(fs.readFileSync(dbPath), beforeRestart);
+  assert.equal(fs.statSync(dbPath).mtimeMs, mtime, "session restart must not maintain the index");
+  const coldContext = await tools.get("session_hub_context").execute("cold", { id: "pi:11111111" }, null, null, ctx);
+  assert.ok(coldContext.content[0].text.includes("# Imported Session Context"));
   await commands.get("session-search").handler("billing", ctx);
   assert.ok(!notices.some(note => note.level === "error"));
   console.log("PASS Pi shutdown/restart reopens service without a closed-handle regression");

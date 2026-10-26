@@ -179,9 +179,24 @@ try {
   assert.equal(index.db.get("select count(*) as n from search_scopes where uid = 'pi:scopes'").n, 0);
   removeSessions(index, [matches("userneedle", "user")[0].uid]);
   assert.equal(index.db.get("select count(*) as n from search_scopes").n, 4);
-  index.db.run("insert into search_scopes (uid,user_text) values ('orphan','orphanneedle')");
+  index.db.run("insert into search (rowid,uid,body) values (-1000,'orphan','orphanneedle')");
+  index.db.run("insert into search_scopes (rowid,uid,user_text) values (-1000,'orphan','orphanneedle')");
   index.close(); index = await openIndex(dbPath);
-  assert.equal(index.db.get("select count(*) as n from search_scopes where uid = 'orphan'").n, 0);
+  const orphanCounts = () => ["search", "search_scopes"].map(table =>
+    index.db.get(`select count(*) as n from ${table} where uid = 'orphan'`).n);
+  assert.deepEqual(orphanCounts(), [1, 1], "opening the index must not sweep FTS");
+  assert.equal(matches("orphanneedle", "user").length, 0, "orphan rows must not appear in searches");
+  await scan(index, registry, { maxPerHarness: 0 });
+  assert.deepEqual(orphanCounts(), [1, 1], "capped refreshes do not run full-table maintenance");
+  const piAdapter = registry.get("pi");
+  const listPi = piAdapter.listSessions;
+  piAdapter.listSessions = async () => { throw new Error("synthetic maintenance failure"); };
+  try {
+    assert.ok((await scan(index, registry)).failed.includes("pi"));
+    assert.deepEqual(orphanCounts(), [1, 1], "failed refreshes defer full-table maintenance");
+  } finally { piAdapter.listSessions = listPi; }
+  await scan(index, registry);
+  assert.deepEqual(orphanCounts(), [0, 0], "complete refreshes repair both FTS tables");
   console.log("PASS v3 migration invalidates parser fingerprints, unchanged sources rebuild scope data without changing legacy bodies; changed/deleted sessions and orphan cleanup stay consistent");
 
   const bounded = new ScopedSearchText();

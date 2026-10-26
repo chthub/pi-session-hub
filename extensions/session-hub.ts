@@ -1059,16 +1059,13 @@ export default function sessionHub(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => { service.close(); });
 
-  // Open the shared index without scanning sources at startup.
-  pi.on("session_start", async () => {
+  // Startup must not touch the shared index (which may live on NFS). Service
+  // methods initialize lazily when a command or history tool actually needs it.
+  pi.on("session_start", () => {
     service.close();
     service = new SessionHubService({ home });
     status = null;
+    detections = [];
     sessions = [];
-    try {
-      await service.init();
-    } catch {
-      /* non-fatal */
-    }
   });
 }

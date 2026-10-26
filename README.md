@@ -421,6 +421,8 @@ Adding a harness means adding one file under `src/adapters/` that implements `Se
 - `"exact phrase"` matches phrases
 - `-term` excludes
 
+Pi startup (including subagents) only registers Hub commands/tools; it does not open, migrate, or scan the index. Enabling history tools also does not open it. The first history query or browser action initializes the service; an empty index is then scanned as needed. Full-table FTS orphan repair runs only after a complete, uncapped, successful index refresh, never when opening an index. Ordinary updates/deletions maintain their own FTS records, and searches reject orphan UID/rowid mismatches while repair is pending.
+
 The index stores each session's title, metadata and a bounded excerpt of the conversation (20k characters, sampled from both the start and the end). It is a second local copy of some conversation text: if you back up `~/.pi`, the index goes with it. Delete `~/.pi/agent/pi-session-hub/index.sqlite` to remove it; it is rebuilt on the next scan.
 
 ## Failure behaviour
@@ -471,6 +473,8 @@ Verified against the running binary rather than assumed:
 
 ```bash
 node test/scan.mjs         # isolated incremental-scan regression tests
+node test/lifecycle.mjs    # init/close races, failure retry, concurrent migrations, deferred FTS repair
+npm run test:startup       # actual Pi RPC startup, no model calls; requires Pi on PATH
 node test/smoke.mjs        # exercise every adapter against real stores
 npm test                  # synthetic acceptance + scan/service/workspace/Pi-environment/Pi-host suites
 npm run test:vscode       # compile/build + host/protocol/PDF export; requires a local browser
@@ -479,6 +483,8 @@ npm run test:web          # synthetic HTTP/security/math/PDF/CLI checks; require
 npm run test:web:browser  # optional real browser checks; requires Chrome or CHROME_BIN
 npm run test:pdf          # PDF rendering/safety/persistence; requires Chrome or CHROME_BIN
 ```
+
+The startup test uses isolated synthetic settings and a 4,000-session synthetic index. It measures three paired RPC `get_state` readiness samples with and without the Hub extension and asserts startup neither creates nor modifies the index. It sends no prompt. Use `PI_BIN` to select Pi, `HUB_STARTUP_ROWS` to change fixture size, and `TMPDIR` to place fixtures on the filesystem being measured (e.g. NFS). `node test/startup.mjs --benchmark` reports timings without enforcing the lazy-start assertions, for comparison with older implementations.
 
 The Web tests use temporary, synthetic homes and fake credential values; they do
 not require or publish real transcripts. PDF export checks need Chrome, Chromium or Edge installed on the test host (or `CHROME_BIN`). The real-renderer `test:pdf` fixture defaults to `/usr/bin/google-chrome`; set `CHROME_BIN` explicitly on other platforms or when using Chromium/Edge. The browser suites also accept `CHROME_BIN`. Browser tests use Chrome's debugging

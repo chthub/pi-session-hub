@@ -63,7 +63,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/acceptance.mjs && node test/search-excerpt.mjs && node test/search-scopes.mjs && node test/tool-label-locale.mjs && node test/reader-streaming.mjs && node test/scan.mjs && node test/service.mjs && node test/workspace.mjs && node test/pi-environment.mjs && node test/codex-homes.mjs && node test/pi-host.mjs",
+    "test": "node test/acceptance.mjs && node test/search-excerpt.mjs && node test/search-scopes.mjs && node test/tool-label-locale.mjs && node test/reader-streaming.mjs && node test/scan.mjs && node test/service.mjs && node test/workspace.mjs && node test/pi-environment.mjs && node test/codex-homes.mjs && node test/pi-host.mjs && node test/lifecycle.mjs",
+    "test:startup": "node test/startup.mjs",
     "test:real": "node test/acceptance.mjs --real",
     "test:vscode": "npm run check --prefix vscode-extension && npm run build --prefix vscode-extension && node test/vscode.mjs && node test/vscode-stars.mjs && node test/vscode-time.mjs",
     "test:pdf": "node test/pdf.mjs && node test/pdf-export.mjs",

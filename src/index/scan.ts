@@ -12,6 +12,7 @@ import type { ListOptions } from "../adapters/types.ts";
 import {
   indexCount,
   markIndexed,
+  pruneOrphanedSearch,
   removeSessions,
   indexedFileSessions,
   sourceFingerprint,
@@ -200,9 +201,16 @@ export async function scan(
 
   result.scanned = [...succeeded];
 
+  transaction(handle, () => {
+    // Full-table FTS repair belongs to complete refreshes, not cached queries,
+    // database opening, or deliberately capped/failed refreshes.
+    if (opts.maxPerHarness === undefined && !result.failed.length && !result.incomplete.length) {
+      pruneOrphanedSearch(handle);
+    }
+    markIndexed(handle, new Date().toISOString());
+  });
   result.total = indexCount(handle);
   result.durationMs = Date.now() - started;
-  markIndexed(handle, new Date().toISOString());
   opts.onProgress?.({ phase: "done", done: adapters.length, total: adapters.length });
   return result;
 }
